@@ -1,0 +1,12 @@
+dataset/
+reference/
+models/
+data/raw/
+outputs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+data/
+.codex/
+.agents/
+nohup.out
