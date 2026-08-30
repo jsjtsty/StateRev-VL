@@ -229,8 +229,12 @@ def add_t0_rows(rows: list[dict], gt_by_video: dict, sample_fps: float) -> list[
                 t0_state_correct[d["video"]] = bool(d["state_correct"])
     have = {(r["trajectory_id"], r["t"]) for r in rows}
     added: list[dict] = []
+    seen: set[str] = set()
     for r0 in rows:
         tr, video = r0["trajectory_id"], r0["video"]
+        if tr in seen:
+            continue
+        seen.add(tr)
         if (tr, 0) in have:
             continue
         gt = gt_by_video[video]
