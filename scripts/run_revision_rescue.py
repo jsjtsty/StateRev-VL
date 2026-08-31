@@ -344,8 +344,8 @@ def build(args: argparse.Namespace) -> dict:
 # ---------------------------------------------------------------------------
 
 def run(args: argparse.Namespace) -> None:
+    from run_state_rev_audit import load_transformers_vl_model
     from run_behavior_screening import (
-        load_model_and_processor,
         run_inference,
         score_candidates,
     )
@@ -356,7 +356,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
     model_dir = Path(args.model_dir)
-    model, processor = load_model_and_processor(model_dir)
+    model, processor = load_transformers_vl_model(model_dir)
     device = "cuda:0"
     manifest = [json.loads(l) for l in
                 open(args.out_dir / "revision_rescue_manifest.jsonl")]

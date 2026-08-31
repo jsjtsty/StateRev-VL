@@ -296,7 +296,7 @@ def _hf_forward_factory(model, layers: tuple[int, ...]):
 def run_model(args) -> None:
     import torch  # noqa: F401
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from run_behavior_screening import load_model_and_processor
+    from run_state_rev_audit import load_transformers_vl_model
     from run_vetbench_screening import sample_clip, video_processor_kwargs
     from run_state_rev_audit import state_messages
     from run_revision_rescue import load_samples
