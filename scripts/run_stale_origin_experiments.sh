@@ -79,6 +79,12 @@ from transformers import Qwen3_5ForConditionalGeneration  # noqa: F401
 print(f"python={sys.version.split()[0]} numpy={numpy.__version__} "
       f"torch={torch.__version__} av={av.__version__} "
       f"transformers={transformers.__version__}")
+ref = (5, 15, 1)
+cur = tuple(int(x) for x in transformers.__version__.split(".")[:3])
+if cur != ref:
+    print(f"WARNING: transformers {transformers.__version__} != verified "
+          f"{ref[0]}.{ref[1]}.{ref[2]} (model loading may fail with "
+          f"weight-shape mismatch; fix: pip install 'transformers==5.15.1')")
 print(f"cuda available={torch.cuda.is_available()} "
       f"devices={torch.cuda.device_count()}")
 if torch.cuda.is_available():
