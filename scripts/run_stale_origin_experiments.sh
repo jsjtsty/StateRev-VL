@@ -37,7 +37,8 @@ set -euo pipefail
 PYTHON="${PYTHON:-python}"
 MODEL_DIR="${MODEL_DIR:-models/Qwen3-VL-8B-Instruct}"
 STAGES="${STAGES:-all}"
-N_JOBS="${N_JOBS:-$(nproc)}"
+# cap CPU workers: 80 forked torch workers on a shared box froze it
+N_JOBS="${N_JOBS:-$(( $(nproc) < 16 ? $(nproc) : 16 ))}"
 N_PERMS=100
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
