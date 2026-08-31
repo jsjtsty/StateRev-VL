@@ -361,50 +361,54 @@ def run(args: argparse.Namespace) -> None:
     manifest = [json.loads(l) for l in
                 open(args.out_dir / "revision_rescue_manifest.jsonl")]
     results = []
-    for i, rec in enumerate(manifest):
-        clip = sample_clip(Path(rec["prefix_path"]), rec["frame_start"],
-                           rec["frame_end"])
-        pkw = video_processor_kwargs(clip, rec["sample_fps"])
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": [
-                {"type": "video", "video": clip},
-                {"type": "text", "text": rec["prompt_text"]},
-            ]},
-        ]
-        raw = run_inference(model, processor, messages, device,
-                            GEN_MAX_NEW_TOKENS, GEN_THINKING,
-                            processor_kwargs=pkw)
-        pred = parse_tracking_option(raw)
-        scores = score_candidates(model, processor, messages,
-                                  ("Left", "Middle", "Right"), device,
-                                  processor_kwargs=pkw)
-        margin = (float(scores[rec["gt_state"]]
-                        - scores[rec["gt_prev_state"]])
-                  if rec["gt_state"] in scores
-                  and rec["gt_prev_state"] in scores else None)
-        results.append({
-            "sample_id": rec["sample_id"], "trajectory_id":
-            rec["trajectory_id"], "t": rec["t"], "group": rec["group"],
-            "condition": rec["condition"], "pred_state": pred,
-            "state_correct": pred == rec["gt_state"],
-            "margin_gt_state_minus_gt_prev": margin,
-            "baseline_reproduced": (
-                (pred == rec["native_state_pred"])
-                if rec["condition"] == "baseline" else ""),
-        })
-        if (i + 1) % 20 == 0:
-            print(f"run: {i + 1}/{len(manifest)}", flush=True)
+    out_csv = args.out_dir / "revision_rescue_results.csv"
+    with open(out_csv, "w", newline="") as f:
+        w = None
+        for i, rec in enumerate(manifest):
+            clip = sample_clip(Path(rec["prefix_path"]), rec["frame_start"],
+                               rec["frame_end"])
+            pkw = video_processor_kwargs(clip, rec["sample_fps"])
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": [
+                    {"type": "video", "video": clip},
+                    {"type": "text", "text": rec["prompt_text"]},
+                ]},
+            ]
+            raw = run_inference(model, processor, messages, device,
+                                GEN_MAX_NEW_TOKENS, GEN_THINKING,
+                                processor_kwargs=pkw)
+            pred = parse_tracking_option(raw)
+            scores = score_candidates(model, processor, messages,
+                                      ("Left", "Middle", "Right"), device,
+                                      processor_kwargs=pkw)
+            margin = (float(scores[rec["gt_state"]]
+                            - scores[rec["gt_prev_state"]])
+                      if rec["gt_state"] in scores
+                      and rec["gt_prev_state"] in scores else None)
+            row = {
+                "sample_id": rec["sample_id"], "trajectory_id":
+                rec["trajectory_id"], "t": rec["t"], "group": rec["group"],
+                "condition": rec["condition"], "pred_state": pred,
+                "state_correct": pred == rec["gt_state"],
+                "margin_gt_state_minus_gt_prev": margin,
+                "baseline_reproduced": (
+                    (pred == rec["native_state_pred"])
+                    if rec["condition"] == "baseline" else ""),
+            }
+            results.append(row)
+            # incremental save: a crash must not lose finished rows
+            if w is None:
+                w = csv.DictWriter(f, fieldnames=list(row.keys()))
+                w.writeheader()
+            w.writerow({k: ("" if v is None else v) for k, v in row.items()})
+            f.flush()
+            if (i + 1) % 20 == 0:
+                print(f"run: {i + 1}/{len(manifest)}", flush=True)
 
     # baseline reproduction check vs the aligned behavior
     nat = {r["sample_id"]: r for r in results if r["condition"] == "baseline"}
-    repro = [r for r in nat if r["state_correct"]]
-    with open(args.out_dir / "revision_rescue_results.csv", "w",
-              newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(results[0].keys()))
-        w.writeheader()
-        for r in results:
-            w.writerow({k: ("" if v is None else v) for k, v in r.items()})
+    repro = [r for r in nat.values() if r["state_correct"]]
     base = [r for r in results if r["condition"] == "baseline"]
     by: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     for r in results:

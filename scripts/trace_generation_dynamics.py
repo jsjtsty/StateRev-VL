@@ -272,6 +272,25 @@ def selftest_causality(topk: int = DEFAULT_TOPK, n_steps: int = 4,
     return ok
 
 
+def _dump_hidden(out_dir: Path, samples: list[dict], hid: dict,
+                 lengths: dict, layers: tuple[int, ...]) -> np.ndarray:
+    """(Re)write the hidden-state npz for the samples collected so far.
+    Called every 10 samples so a crash does not lose the trace."""
+    n_s = len(samples)
+    max_steps = max(lengths[s["trajectory_id"] + "_t" + str(s["t"])]
+                    for s in samples) if samples else 0
+    n_l = len(layers)
+    dim = next(iter(hid.values()))[0][0].shape[0] if hid else 0
+    arr = np.zeros((n_s, max_steps, n_l, dim), dtype=np.float32)
+    for si, s in enumerate(samples):
+        sid = f"{s['trajectory_id']}_t{s['t']}"
+        for li in range(n_l):
+            for gi in range(lengths[sid]):
+                arr[si, gi, li, :] = hid[sid][li][gi]
+    np.savez_compressed(out_dir / "generation_hidden.npz", hidden=arr)
+    return arr
+
+
 # ---------------------------------------------------------------------------
 # Run mode (future; requires GPU + model dir - NOT run in this session)
 # ---------------------------------------------------------------------------
@@ -321,9 +340,13 @@ def run_model(args) -> None:
         pos_ids[name] = int(ids[0])
     eos_id = tok.eos_token_id
 
+    import csv
     rows = []
     hid = {}
     lengths = {}
+    csv_path = out_dir / "generation_trace.csv"
+    cf = open(csv_path, "w", newline="")
+    w = None
     for si, s in enumerate(samples):
         sid = f"{s['trajectory_id']}_t{s['t']}"
         clip = sample_clip(Path(s["prefix_path"]), 0, int(s["frame_end"]))
@@ -340,7 +363,7 @@ def run_model(args) -> None:
         lengths[sid] = len(recs)
         for r in recs:
             txt = tok.decode([r["token_id"]], skip_special_tokens=True)
-            rows.append({
+            row = {
                 "sample_id": sid,
                 "trajectory_id": s["trajectory_id"],
                 "t": s["t"],
@@ -363,34 +386,24 @@ def run_model(args) -> None:
                     == s["gt_state"].lower(),
                 "is_prev_state_word": txt.strip().lower()
                     == s["gt_prev_state"].lower(),
-            })
+            }
+            rows.append(row)
+            # incremental save: a crash must not lose finished samples
+            if w is None:
+                w = csv.DictWriter(cf, fieldnames=list(row.keys()))
+                w.writeheader()
+            w.writerow({k: ("" if v is None else v) for k, v in row.items()})
+        cf.flush()
         # stow per-step hidden for this sample
         hid[sid] = [[r["hiddens"][li] for r in recs] for li in range(len(layers))]
         print(f"  [{si + 1}/{len(samples)}] {sid}: {len(recs)} steps", flush=True)
-
-    # write CSV
-    import csv
-    csv_path = out_dir / "generation_trace.csv"
-    if rows:
-        with open(csv_path, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-            w.writeheader()
-            w.writerows(rows)
-        print(f"Wrote {csv_path} ({len(rows)} rows)")
+        if (si + 1) % 10 == 0:
+            _dump_hidden(out_dir, samples[:si + 1], hid, lengths, layers)
+    cf.close()
+    print(f"Wrote {csv_path} ({len(rows)} rows)")
 
     # write hidden npz: (n_samples, max_steps, n_layers, hidden_dim)
-    n_s = len(samples)
-    max_steps = max(lengths.values()) if lengths else 0
-    n_l = len(layers)
-    first_sid = list(hid.keys())[0]
-    dim = hid[first_sid][0][0].shape[0] if hid else 0
-    arr = np.zeros((n_s, max_steps, n_l, dim), dtype=np.float32)
-    for si, s in enumerate(samples):
-        sid = f"{s['trajectory_id']}_t{s['t']}"
-        for li in range(n_l):
-            for gi in range(lengths[sid]):
-                arr[si, gi, li, :] = hid[sid][li][gi]
-    np.savez_compressed(out_dir / "generation_hidden.npz", hidden=arr)
+    arr = _dump_hidden(out_dir, samples, hid, lengths, layers)
     shape_meta = {
         "shape": list(arr.shape),
         "axes": ["sample (manifest order)", "gen_index (0-padded)",
