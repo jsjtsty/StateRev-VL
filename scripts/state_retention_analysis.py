@@ -394,11 +394,17 @@ def aggregate_results(results: list[dict], n_layers: int) -> list[dict]:
                 mean = float(np.mean(ps))
                 nulls = [m[(layer, stat, sub)] for (s, b), m in vecs.items()
                           if (layer, stat, sub) in m]
+                if stat == "drop":
+                    # drop: a NEGATIVE drop is the effect of interest -> low tail
+                    p1 = (float(np.mean(np.asarray(nulls) <= mean))
+                          if nulls else None)
+                else:
+                    p1 = _pval(mean, nulls)
                 row = {"layer": layer,
                        "layer_name": f"layer_{layer:02d}" if layer else "embedding",
                        "subset": sub, "stat": stat, "n_splits": len(ps),
                        "mean": mean,
-                       "p_one_layer": _pval(mean, nulls),
+                       "p_one_layer": p1,
                        "null_mean": float(np.mean(nulls)) if nulls else None,
                        "null_p95": float(np.percentile(nulls, 95)) if nulls else None}
                 out.append(row)
@@ -410,14 +416,21 @@ def aggregate_results(results: list[dict], n_layers: int) -> list[dict]:
             for row in out:
                 if row["subset"] != sub or row["stat"] != stat:
                     continue
+                extreme = min if stat == "drop" else max
                 maxts = []
                 for (s, b), m in vecs.items():
                     vals = [m[(l, stat, sub)] for l in means
                             if (l, stat, sub) in m]
                     if len(vals) == len(means):
-                        maxts.append(max(vals))
-                row["p_maxT"] = (float(np.mean(np.asarray(maxts) >= row["mean"]))
-                                 if maxts else None)
+                        maxts.append(extreme(vals))
+                if not maxts:
+                    row["p_maxT"] = None
+                elif stat == "drop":
+                    row["p_maxT"] = float(np.mean(np.asarray(maxts)
+                                                  <= row["mean"]))
+                else:
+                    row["p_maxT"] = float(np.mean(np.asarray(maxts)
+                                                  >= row["mean"]))
     return out
 
 
@@ -611,10 +624,16 @@ def main() -> None:
         import pickle
         with open(args.cache_pkl, "rb") as f:
             results = pickle.load(f)
-        # recompute raw drift (seed-independent)
-        Xp, Xq = load_hidden(args.npz, complete)
-        cos, l2 = raw_drift(Xp, Xq)
-        del Xp, Xq
+        # recompute raw drift (seed-independent); optional when the local
+        # npz is incomplete (e.g. the t=0 backfill ran on another machine)
+        try:
+            Xp, Xq = load_hidden(args.npz, complete)
+            cos, l2 = raw_drift(Xp, Xq)
+            del Xp, Xq
+        except (KeyError, FileNotFoundError, SystemExit) as e:
+            print(f"WARNING: raw drift not recomputed (npz incomplete: {e}); "
+                  f"cos/l2 columns will be empty.")
+            cos, l2 = None, None
 
     # ---- per (pair, layer) held-out sample table -------------------------
     acc = {"pair_id": pair_ids}
@@ -662,8 +681,8 @@ def main() -> None:
                 "p_event_gt": avg("p_event_gt"),
                 "drift_proj": avg("drift_proj"),
                 "drift_logit_gt": avg("drift_logit_gt"),
-                "cos_pre_post": float(cos[i, layer]),
-                "l2_norm_dist": float(l2[i, layer]),
+                "cos_pre_post": float(cos[i, layer]) if cos is not None else None,
+                "l2_norm_dist": float(l2[i, layer]) if l2 is not None else None,
             }
             if row["p_pre_gt"] is not None and row["p_post_gt"] is not None:
                 row["prob_drop"] = row["p_post_gt"] - row["p_pre_gt"]
@@ -796,9 +815,13 @@ def main() -> None:
                             "mean_prob_drop_all": float(np.mean(
                                 [s["prob_drop"] for s in sample_rows
                                  if s["layer"] == layer and s["prob_drop"] is not None])),
-                            "mean_cos_pre_post_all": float(np.mean(
-                                [s["cos_pre_post"] for s in sample_rows
-                                 if s["layer"] == layer]))})
+                             "mean_cos_pre_post_all": (
+                                 float(np.mean([s["cos_pre_post"]
+                                                for s in sample_rows
+                                                if s["layer"] == layer
+                                                and s["cos_pre_post"] is not
+                                                None]))
+                                 if cos is not None else None)})
 
     headline = {}
     for sub in SUBSETS:
@@ -838,12 +861,19 @@ def main() -> None:
                 p["canonical_group"] for p in complete if p["t"] == t
                 and p["canonical_group"])) for t in sorted(set(t_of))},
         },
-        "note_success_group": ("all 17 aligned revision successes occur at t=1, "
-                               "whose h_pre (t=0) is missing; the stale-vs-"
-                               "success contrast therefore requires the t=0 "
-                               "backfill. With the current data the stale "
-                               "group (26 rows, t=2..5) can be compared "
-                               "against maintenance/other groups only."),
+        "note_success_group": ("all 17 aligned revision successes occur at t=1. "
+                               "Caveat: at t=1 the pre-event state S_0 is the "
+                               "INITIAL state, which is stated verbatim in the "
+                               "prompt and is also the only state visible in "
+                               "the h_pre (t=0) clip; its pre-event readout "
+                               "(acc_pre=1.0) therefore partly reflects "
+                               "prompt/initial-frame anchoring rather than a "
+                               "maintained working-state code. The 26 stale "
+                               "rows span t=2..5, where S_{t-1} is a computed "
+                               "(non-verbatim) state, so stale-vs-success is "
+                               "not like-for-like and should be read with "
+                               "this in mind; the like-for-like contrast is "
+                               "stale-vs-maintenance (both non-initial)."),
         "headline_layer_results": headline,
         "group_contrasts_headline_layer": contrasts,
         "layer_profile_all": profile,
@@ -937,9 +967,10 @@ def write_report(out_dir: Path, summary: dict, headline: dict,
     L.append("| layer | mean margin drop | mean prob drop | mean cos(pre,post) |")
     L.append("|---|---|---|---|")
     for p in profile:
+        cos_s = (f"{p['mean_cos_pre_post_all']:.3f}"
+                 if p["mean_cos_pre_post_all"] is not None else "n/a")
         L.append(f"| {p['layer_name']} | {p['mean_margin_drop_all']:+.3f} | "
-                 f"{p['mean_prob_drop_all']:+.3f} | "
-                 f"{p['mean_cos_pre_post_all']:.3f} |")
+                 f"{p['mean_prob_drop_all']:+.3f} | {cos_s} |")
     L.append("\n## Protocol notes\n")
     for k, v in summary["protocol"].items():
         L.append(f"- **{k}**: {v}")
