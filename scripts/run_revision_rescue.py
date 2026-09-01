@@ -360,6 +360,15 @@ def run(args: argparse.Namespace) -> None:
     device = "cuda:0"
     manifest = [json.loads(l) for l in
                 open(args.out_dir / "revision_rescue_manifest.jsonl")]
+    if args.limit_samples:
+        seen = []
+        for rec in manifest:
+            if rec["sample_id"] not in seen:
+                seen.append(rec["sample_id"])
+            if len(seen) >= args.limit_samples:
+                break
+        keep = set(seen)
+        manifest = [r for r in manifest if r["sample_id"] in keep]
     results = []
     out_csv = args.out_dir / "revision_rescue_results.csv"
     with open(out_csv, "w", newline="") as f:
@@ -375,6 +384,14 @@ def run(args: argparse.Namespace) -> None:
                     {"type": "text", "text": rec["prompt_text"]},
                 ]},
             ]
+            # NOTE: run_inference passes enable_thinking to
+            # apply_chat_template, which makes the base class drop
+            # processor_kwargs - the effective video sampling is the
+            # processor default, IDENTICAL to the behavior audit that
+            # produced the baseline predictions (verified by
+            # baseline_reproduced below). Do not "fix" the kwarg without
+            # re-running the audit, or the baseline would no longer
+            # reproduce. See build_temporal_intervention_manifest.py.
             raw = run_inference(model, processor, messages, device,
                                 GEN_MAX_NEW_TOKENS, GEN_THINKING,
                                 processor_kwargs=pkw)
@@ -453,6 +470,9 @@ def main() -> None:
                     help="control groups to include besides stale")
     ap.add_argument("--model-dir", type=str, default=None,
                     help="required for --mode run")
+    ap.add_argument("--limit-samples", type=int, default=0,
+                    help="run only the first N samples (all 4 conditions) "
+                         "- for smoke tests")
     args = ap.parse_args()
     if args.mode == "run" and not args.model_dir:
         raise SystemExit("--mode run requires --model-dir")

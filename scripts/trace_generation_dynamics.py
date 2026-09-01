@@ -51,8 +51,16 @@ Modes
   selftest   CPU, no model: toy-model causal discipline test (run this now).
   run        Requires --model-dir; loads Qwen3-VL on GPU (run later when the
              machine is free). Greedy decoding, identical prompt to the
-             behavior audit baseline (thinking=off, same state question),
-             same video sampling (sample_fps=8).
+             behavior audit baseline (thinking=off, same state question).
+             Video sampling REPLICATES THE BEHAVIOR AUDIT'S EFFECTIVE
+             SAMPLING: the apply_chat_template call below mirrors
+             run_inference (including the enable_thinking kwarg, which makes
+             the base class drop processor_kwargs -> processor default
+             ~int(clip/24*2) frames, NOT the nominal 8 fps). Do NOT
+             "fix" the kwarg without re-running the audit, or the trace
+             would no longer explain the recorded answers. See
+             build_temporal_intervention_manifest.py for the two sampling
+             regimes (ACTUAL vs NOMINAL).
 
 Outputs (run mode, in --out-dir)
 --------------------------------
@@ -325,10 +333,12 @@ def run_model(args) -> None:
     layers = tuple(int(x) for x in args.layers.split(","))
     samples = load_samples(Path(args.behavior_csv),
                            controls={"maintenance", "other_failure", "rest"})
+    if args.limit_samples:
+        samples = samples[:args.limit_samples]
     print(f"Tracing {len(samples)} samples x {GEN_MAX_NEW_TOKENS} max steps "
           f"(layers={layers}) ...", flush=True)
 
-    model, processor = load_model_and_processor(Path(args.model_dir))
+    model, processor = load_transformers_vl_model(Path(args.model_dir))
     model.eval()
     fwd = _hf_forward_factory(model, layers)
     tok = processor.tokenizer
@@ -344,6 +354,7 @@ def run_model(args) -> None:
     rows = []
     hid = {}
     lengths = {}
+    input_lens = {}
     csv_path = out_dir / "generation_trace.csv"
     cf = open(csv_path, "w", newline="")
     w = None
@@ -352,12 +363,19 @@ def run_model(args) -> None:
         clip = sample_clip(Path(s["prefix_path"]), 0, int(s["frame_end"]))
         messages = state_messages(
             clip, s["initial_state"], int(s["n_swaps_shown"]))
+        # NOTE: mirrors run_inference exactly (enable_thinking +
+        # processor_kwargs). The enable_thinking kwarg makes the base class
+        # drop processor_kwargs, so the effective video sampling is the
+        # processor default (metadata fps=24, target fps=2) - identical to
+        # the behavior audit. Intentional: the trace must use the same
+        # visual input that produced the recorded answers.
         inputs = processor.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
             enable_thinking=False, return_dict=True, return_tensors="pt",
             processor_kwargs=video_processor_kwargs(
                 clip, float(s["sample_fps"])))
         prompt_ids = inputs["input_ids"][0].tolist()
+        input_lens[sid] = len(prompt_ids)
         recs = trace_decode(fwd, prompt_ids, GEN_MAX_NEW_TOKENS,
                             topk=args.topk, stop_token=eos_id)
         lengths[sid] = len(recs)
@@ -417,7 +435,7 @@ def run_model(args) -> None:
 
     summary = {
         "mode": "run",
-        "n_samples": n_s,
+        "n_samples": len(samples),
         "groups": {g: sum(1 for s in samples if s["group"] == g)
                    for g in sorted({s["group"] for s in samples})},
         "layers": list(layers),
@@ -430,6 +448,17 @@ def run_model(args) -> None:
         "position_token_ids": pos_ids,
         "eos_token_id": eos_id,
         "n_steps_per_sample": lengths,
+        "input_len_per_sample": input_lens,
+        "video_sampling": (
+            "ACTUAL behavior-audit path: run_inference-style "
+            "apply_chat_template (enable_thinking kwarg drops "
+            "processor_kwargs) -> processor default sampling "
+            "int(clip/24*2) frames (9/14/19/24/29 for t=1..5). This "
+            "matches the behavior audit and the rescue baseline; the "
+            "hidden-state PROBE data used the nominal 8 fps sampling "
+            "(31/47/63/79/95) instead - see temporal_intervention_"
+            "manifest.py. Do not 'fix' the kwarg without regenerating "
+            "the audit data."),
         "files": ["generation_trace.csv", "generation_hidden.npz",
                   "generation_hidden_shape.json"],
     }
@@ -454,6 +483,8 @@ def main() -> None:
                          "is 36)")
     ap.add_argument("--topk", type=int, default=DEFAULT_TOPK)
     ap.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
+    ap.add_argument("--limit-samples", type=int, default=0,
+                    help="trace only the first N samples - for smoke tests")
     args = ap.parse_args()
 
     if args.mode == "selftest":

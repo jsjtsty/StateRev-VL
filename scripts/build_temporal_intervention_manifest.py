@@ -37,23 +37,31 @@ For a sample at step t (the model saw clips [0, 57+t*60)):
                                                        metadata, not a clean
                                                        post-event window)
 
-Sampling (EXACT, reproduced from the installed Qwen3-VL processor,
-transformers 5.15.1, video_processing_qwen3_vl.py::sample_frames):
+Sampling - TWO different pipelines actually ran (critical!):
 
-  num_frames = int(total_clip_frames / metadata_fps * target_fps)
-  num_frames = clip to [min_frames, max_frames, total_clip_frames]
-  indices    = round(linspace(0, total_clip_frames-1, num_frames))
+  NOMINAL (intended, 8 fps): what the probe runs used. The probe script
+  deliberately avoids the `enable_thinking` kwarg so the processor receives
+  fps=8 + video_metadata (fps=30):
+      num_frames = int(clip_len/30*8) clipped to [4,768,clip_len]
+      indices    = round(linspace(0, clip_len-1, num_frames))
+      -> 31 / 47 / 63 / 79 / 95 frames for t=1..5
 
-with metadata_fps=30 (true video fps) and target_fps=sample_fps=8.0. The
-manifest records these exact indices for BOTH:
+  ACTUAL (behavior audit + rescue baseline): run_inference passes
+  enable_thinking to apply_chat_template, which makes the base class DROP
+  processor_kwargs (see the NOTE in run_hidden_state_probe.py). The
+  processor then falls back to its defaults (fps=2, no metadata -> fps=24):
+      num_frames = int(clip_len/24*2) clipped to [4,768,clip_len]
+      indices    = round(linspace(0, clip_len-1, num_frames))
+      -> 9 / 14 / 19 / 24 / 29 frames for t=1..5
+  The behavior CSV column "sampled_frames" (31/47/63/79/95) is the NOMINAL
+  formula, NOT what the audit actually sampled.
 
-  * the baseline clip [0, frame_end) - what the model actually saw in the
-    behavior audit (its index list must reproduce the audit's sampling);
-  * the extended clip [0, total_frames=372) - reference indices for future
-    runs that need the post-event tail (t=5). NOTE: extending the clip
-    changes num_frames, so ALL indices shift slightly; both sets are
-    recorded and the future run must use the set matching its own clip
-    length.
+The manifest records BOTH index sets (per segment) for the baseline clip
+[0, frame_end) and the extended clip [0, 372). A future patching run MUST
+rebuild its clip to match the pipeline it wants to reproduce: ACTUAL set to
+stay comparable with the behavior/rescue data, NOMINAL set to match the
+hidden-state probe data. Extending the clip changes num_frames, so every
+index shifts - use the set matching the run's own clip length.
 
 Validation performed at build time (hard failures -> exit 1):
   * every boundary is an integer, 0 <= pre < event <= clip_end <= 372
@@ -219,27 +227,36 @@ def build(args) -> None:
             errors.append(f"{r['trajectory_id']}_t{t}: bad boundaries "
                           f"{bounds}")
 
-        # baseline clip = [0, frame_end) : what the model actually saw
-        base_idx = processor_sample_indices(frame_end, FPS, SAMPLE_FPS)
-        n_base = len(base_idx)
+        # ACTUAL = the behavior audit / rescue baseline's effective sampling
+        # (run_inference's enable_thinking kwarg drops processor_kwargs ->
+        # processor defaults: target fps=2, metadata fps default 24).
+        # NOMINAL = the intended 8 fps sampling used by the hidden-state
+        # probe runs (and by the behavior CSV's sampled_frames column).
+        base_actual = processor_sample_indices(frame_end, 24, 2.0)
+        base_nominal = processor_sample_indices(frame_end, FPS, SAMPLE_FPS)
         row.update({
             "baseline_clip_start": 0, "baseline_clip_end": frame_end,
-            "baseline_num_sampled": n_base,
-            "baseline_sampled_match_behavior_csv":
-                n_base == int(r["sampled_frames"]),
-            "baseline_sampled_idx": ";".join(map(str, base_idx)),
+            "baseline_actual_num_sampled": len(base_actual),
+            "baseline_nominal_num_sampled": len(base_nominal),
+            "baseline_actual_sampled_idx": ";".join(map(str, base_actual)),
+            "baseline_nominal_sampled_idx": ";".join(map(str, base_nominal)),
+            "baseline_nominal_matches_behavior_csv":
+                len(base_nominal) == int(r["sampled_frames"]),
         })
-        if n_base != int(r["sampled_frames"]):
+        if len(base_nominal) != int(r["sampled_frames"]):
             errors.append(
-                f"{r['trajectory_id']}_t{t}: recomputed {n_base} sampled "
-                f"frames != {r['sampled_frames']} in behavior CSV")
+                f"{r['trajectory_id']}_t{t}: nominal {len(base_nominal)} "
+                f"sampled frames != {r['sampled_frames']} in behavior CSV")
 
         # extended clip = [0, total) : reference for future post-event runs
-        ext_idx = processor_sample_indices(total, FPS, SAMPLE_FPS)
+        ext_actual = processor_sample_indices(total, 24, 2.0)
+        ext_nominal = processor_sample_indices(total, FPS, SAMPLE_FPS)
         row.update({
             "extended_clip_start": 0, "extended_clip_end": total,
-            "extended_num_sampled": len(ext_idx),
-            "extended_sampled_idx": ";".join(map(str, ext_idx)),
+            "extended_actual_num_sampled": len(ext_actual),
+            "extended_nominal_num_sampled": len(ext_nominal),
+            "extended_actual_sampled_idx": ";".join(map(str, ext_actual)),
+            "extended_nominal_sampled_idx": ";".join(map(str, ext_nominal)),
             "extended_index_shift_note":
                 "extending the clip changes num_frames, so every index "
                 "shifts vs the baseline set; future runs MUST use the set "
@@ -248,7 +265,7 @@ def build(args) -> None:
 
         ok_sorted = all(
             all(x < y for x, y in zip(seq, seq[1:])) for seq in
-            (base_idx, ext_idx))
+            (base_actual, base_nominal, ext_actual, ext_nominal))
         row["sampled_indices_strictly_increasing"] = ok_sorted
         if not ok_sorted:
             errors.append(f"{r['trajectory_id']}_t{t}: non-increasing idx")
@@ -257,16 +274,19 @@ def build(args) -> None:
             row[f"{name}_start"] = a
             row[f"{name}_end"] = b
             row[f"{name}_frames"] = max(b - a, 0)
-            row[f"baseline_{name}_sampled_idx"] = ";".join(
-                map(str, idx_in(base_idx, a, b)))
-            row[f"baseline_{name}_n_sampled"] = len(idx_in(base_idx, a, b))
-            row[f"extended_{name}_sampled_idx"] = ";".join(
-                map(str, idx_in(ext_idx, a, b)))
-            row[f"extended_{name}_n_sampled"] = len(idx_in(ext_idx, a, b))
+            for tag, idx in (("baseline_actual", base_actual),
+                             ("baseline_nominal", base_nominal),
+                             ("extended_actual", ext_actual),
+                             ("extended_nominal", ext_nominal)):
+                row[f"{tag}_{name}_sampled_idx"] = ";".join(
+                    map(str, idx_in(idx, a, b)))
+                row[f"{tag}_{name}_n_sampled"] = len(idx_in(idx, a, b))
 
         row["total_frames"] = total
         row["fps"] = FPS
-        row["sample_fps"] = SAMPLE_FPS
+        row["sample_fps_nominal"] = SAMPLE_FPS
+        row["sample_fps_actual"] = 2.0
+        row["metadata_fps_actual"] = 24.0
         row["visual_token_map_note"] = (
             "per-frame visual token count is set by the processor's "
             "smart_resize (temporal_patch/merge) at runtime; this manifest "
@@ -300,10 +320,17 @@ def build(args) -> None:
                     "15-frame tail [357,372) only for t=5",
         },
         "sampling_formula": (
-            "num_frames = int(clip_len/30*8) clipped to [4,768,clip_len]; "
-            "indices = round(linspace(0, clip_len-1, num_frames)) - exact "
-            "reproduction of Qwen3VLVideoProcessor.sample_frames "
-            "(transformers 5.15.1)"),
+            "both sets use Qwen3VLVideoProcessor.sample_frames exactly: "
+            "num_frames = int(clip_len/metadata_fps*target_fps) clipped to "
+            "[4,768,clip_len]; indices = round(linspace(0, clip_len-1, "
+            "num_frames)). ACTUAL (behavior audit / rescue baseline): "
+            "metadata_fps=24 (default), target_fps=2 (processor default) "
+            "-> 9/14/19/24/29 frames at t=1..5. NOMINAL (intended, used by "
+            "probe runs): metadata_fps=30, target_fps=8 -> 31/47/63/79/95. "
+            "Reason for the discrepancy: run_inference passes "
+            "enable_thinking to apply_chat_template, which makes the base "
+            "class drop processor_kwargs (fps + video_metadata) - see the "
+            "NOTE in run_hidden_state_probe.py."),
         "n_errors": len(errors),
         "errors": errors,
         "validation": "bounds integer/contiguous/within-range; sampled idx "
