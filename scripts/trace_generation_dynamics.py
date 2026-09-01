@@ -303,15 +303,31 @@ def _dump_hidden(out_dir: Path, samples: list[dict], hid: dict,
 # Run mode (future; requires GPU + model dir - NOT run in this session)
 # ---------------------------------------------------------------------------
 
-def _hf_forward_factory(model, layers: tuple[int, ...]):
+def _hf_forward_factory(model, layers: tuple[int, ...], base_inputs: dict,
+                        prompt_len: int):
     """Adapter so the generic loop can drive a HuggingFace causal LM:
-    re-feeds the full prefix at every step (no KV cache)."""
+    re-feeds the full text prefix at every step (no KV cache) together
+    with the (unchanging) visual inputs - pixel_values(_videos) /
+    video_grid_thw MUST be passed, otherwise the model answers from
+    text alone. mm_token_type_ids is zero-extended for generated tokens
+    (text type)."""
     import torch
 
     def fwd(ids: list[int]):
         inp = torch.tensor([ids], device=model.device)
+        extra = dict(base_inputs)
+        extra["attention_mask"] = torch.ones(
+            1, len(ids), dtype=torch.long, device=model.device)
+        if "mm_token_type_ids" in extra:
+            pad = len(ids) - prompt_len
+            t = extra["mm_token_type_ids"]
+            if pad > 0:
+                extra["mm_token_type_ids"] = torch.cat(
+                    [t, torch.zeros(1, pad, dtype=t.dtype,
+                                     device=t.device)], dim=1)
         with torch.no_grad():
-            out = model(input_ids=inp, output_hidden_states=True)
+            out = model(**extra, input_ids=inp,
+                        output_hidden_states=True)
         logits = out.logits[0, -1, :].float().cpu().numpy()
         hs = [out.hidden_states[L][0, -1, :].float().cpu().numpy()
               for L in layers]
@@ -340,7 +356,6 @@ def run_model(args) -> None:
 
     model, processor = load_transformers_vl_model(Path(args.model_dir))
     model.eval()
-    fwd = _hf_forward_factory(model, layers)
     tok = processor.tokenizer
     pos_ids = {}
     for name in POSITIONS:
@@ -376,6 +391,16 @@ def run_model(args) -> None:
                 clip, float(s["sample_fps"])))
         prompt_ids = inputs["input_ids"][0].tolist()
         input_lens[sid] = len(prompt_ids)
+        base_inputs = {
+            k: (v.to(model.device) if hasattr(v, "to") else v)
+            for k, v in inputs.items()
+            if k not in ("input_ids", "attention_mask")}
+        if not any(k in base_inputs for k in
+                   ("pixel_values", "pixel_values_videos")):
+            raise RuntimeError(
+                "apply_chat_template returned no visual tensors - the "
+                "trace would be text-only; aborting")
+        fwd = _hf_forward_factory(model, layers, base_inputs, len(prompt_ids))
         recs = trace_decode(fwd, prompt_ids, GEN_MAX_NEW_TOKENS,
                             topk=args.topk, stop_token=eos_id)
         lengths[sid] = len(recs)
