@@ -85,7 +85,8 @@ def build_conditions(row: dict) -> list[tuple[str, str, bool, str | None]]:
     prior_c = PRIOR_TMPL.format(PREV=row["gt_prev_state"])
     event_c = EVENT_TMPL.format(A=a, B=b)
     prior_w = PRIOR_TMPL.format(PREV=WRONG_PREV[row["gt_prev_state"]])
-    event_w = EVENT_TMPL.format(*WRONG_EVENT[row["gt_event"]].split(" and "))
+    wa, wb = WRONG_EVENT[row["gt_event"]].split(" and ")
+    event_w = EVENT_TMPL.format(A=wa, B=wb)
     text3 = _insert(baseline, prior_c + " " + event_c)
     text5 = _insert(baseline, prior_w + " " + event_w)
     return [
