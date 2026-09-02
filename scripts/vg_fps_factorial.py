@@ -159,8 +159,10 @@ def main():
         trajs[k.rsplit("_t", 1)[0]].append(k)
 
     def diff_metric(sample_rows, regime_b, field):
-        # returns acc_8 - acc_2 restricted to sampled rows
-        sel = [k for k in sample_rows if k in b2 and k in b8]
+        # sample_rows is a list of trajectories (each a list of row keys);
+        # flatten to the full row-key list for the resampled trajectories.
+        flat = [k for traj in sample_rows for k in traj]
+        sel = [k for k in flat if k in b2 and k in b8]
         if not sel:
             return 0.0
         a2 = sum(1 for k in sel if T(b2[k][field])) / len(sel)
@@ -208,13 +210,19 @@ def main():
         # columns: regime, target, subset, layer, bal_acc, ... (see probe)
         rep = {}
         for regime in ("2fps", "8fps"):
-            best = {}
+            best, pm = {}, {}
             for tgt in ("event", "state", "prev_state"):
-                vals = [float(r["bal_acc"]) for r in rows
+                vals = [float(r["value"]) for r in rows
                         if r.get("regime") == regime and r.get("target") == tgt
-                        and r.get("subset") == "all"]
+                        and r.get("subset") == "all"
+                        and r.get("metric") == "bal_acc"]
                 best[tgt] = max(vals) if vals else None
-            rep[regime] = best
+                pvals = [float(r["value"]) for r in rows
+                         if r.get("regime") == regime and r.get("target") == tgt
+                         and r.get("subset") == "all"
+                         and r.get("metric") == "p_maxT"]
+                pm[tgt] = min(pvals) if pvals else None
+            rep[regime] = {"best_bal_acc_all": best, "min_p_maxT_all": pm}
         res["dissociation_representational"] = rep
         res["dissociation_caveat"] = (
             "behavioral event_correct comes from an independent event prompt "
