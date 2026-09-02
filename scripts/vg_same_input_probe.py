@@ -44,6 +44,11 @@ C_GRID = (0.1, 1.0, 10.0)
 N_SPLITS, SPLIT_SEED = 10, 20260902
 N_PERM, N_MAXT, MAXT_SEED = 200, 200, 7
 N_LAYERS = 37
+# Speed/robustness: hidden states are 4096-d but train has only ~130-225
+# samples (rank <= n_train-1). A full-dim lbfgs fit at max_iter=1000 is the
+# bottleneck, so we reduce to PCA(min(PCA_DIM, n-1)) (fit on TRAIN only) and
+# cap iterations. A linear probe in PCA space is still a linear probe.
+PCA_DIM, MAX_ITER = 80, 300
 
 
 def T(x) -> bool:
@@ -83,7 +88,7 @@ def select_c(X, y, trajs, c_grid, seed_key):
             tr = [j for j, tr in enumerate(trajs) if tr not in hold]
             if not te or len(set(y[tr])) < 2 or len(set(y[te])) < 2:
                 continue
-            clf = LogisticRegression(C=C, max_iter=1000).fit(Xs[tr], y[tr])
+            clf = LogisticRegression(C=C, max_iter=MAX_ITER).fit(Xs[tr], y[tr])
             scores.append(float((clf.predict(Xs[te]) == y[te]).mean()))
         if scores and float(np.mean(scores)) > best + 1e-12:
             best, best_c = float(np.mean(scores)), C
@@ -91,8 +96,14 @@ def select_c(X, y, trajs, c_grid, seed_key):
 
 
 def _scaler_fit(X):
+    """StandardScaler + PCA, fit on TRAIN rows only. PCA dim is capped at
+    n_train-1 so it is always valid even for small subsets/splits."""
+    from sklearn.decomposition import PCA
+    from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
-    return StandardScaler().fit(X)
+    d = min(PCA_DIM, max(2, X.shape[0] - 1))
+    return Pipeline([("sc", StandardScaler()),
+                     ("pc", PCA(n_components=d, random_state=0))]).fit(X)
 
 
 def build_index(behavior_csv: Path):
@@ -177,7 +188,7 @@ def job_point(idx, H_path, split_k, target, subset, layer, n_splits):
     Xtr_s, Xte_s = sc.transform(Xtr), sc.transform(Xte)
     c = select_c(Xtr_s, y_all[tr_i], trajs_tr, C_GRID,
                  f"{split_k}-{target}-{subset}-{layer}")
-    clf = LogisticRegression(C=c, max_iter=1000).fit(Xtr_s, y_all[tr_i])
+    clf = LogisticRegression(C=c, max_iter=MAX_ITER).fit(Xtr_s, y_all[tr_i])
     p_te = clf.predict(Xte_s)
     y_te = y_all[te_i]
     from collections import Counter
@@ -226,7 +237,7 @@ def job_maxt(idx, H_path, target, subset, n_maxt, n_splits):
         per_layer.append((Xs, Xtes, c))
     obs = np.zeros(N_LAYERS)
     for L, (Xs, Xtes, c) in enumerate(per_layer):
-        clf = LogisticRegression(C=c, max_iter=1000).fit(Xs, y_all[tr_i])
+        clf = LogisticRegression(C=c, max_iter=MAX_ITER).fit(Xs, y_all[tr_i])
         obs[L] = balanced_acc(y_all[te_i], clf.predict(Xtes))
     obs_max = float(obs.max())
 
@@ -237,15 +248,15 @@ def job_maxt(idx, H_path, target, subset, n_maxt, n_splits):
         # within-t permutation: shuffle labels among same-t train rows
         for tt in sorted(set(t_tr)):
             pos = [j for j, x in enumerate(t_tr) if x == tt]
-            lab = yp[pos].copy()
-            rng.shuffle(lab.tolist())
+            lab = yp[pos].tolist()
+            rng.shuffle(lab)
             yp[pos] = lab
         if len(set(yp.tolist())) < 2:
             null_max[k] = 0.0
             continue
         best = 0.0
         for L, (Xs, Xtes, c) in enumerate(per_layer):
-            clf = LogisticRegression(C=c, max_iter=1000).fit(Xs, yp)
+            clf = LogisticRegression(C=c, max_iter=MAX_ITER).fit(Xs, yp)
             best = max(best, balanced_acc(y_all[te_i], clf.predict(Xtes)))
         null_max[k] = best
     p_maxT = float((null_max >= obs_max - 1e-12).mean())
@@ -271,7 +282,16 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     idx = build_index(Path(args.behavior_csv))
+    # Accumulate across runs: if a combined summary already exists (e.g. a
+    # prior 2fps-only run), merge new regimes into it so running regimes
+    # separately does not clobber earlier results.
     results = {}
+    prev = out_dir / "same_input_probe_summary.json"
+    if prev.exists():
+        try:
+            results = json.load(open(prev))
+        except Exception:
+            results = {}
     for tag in [r.strip() for r in args.regimes.split(",") if r.strip()]:
         npz = out_dir / f"hidden_states_{tag}.npz"
         if not npz.exists():
