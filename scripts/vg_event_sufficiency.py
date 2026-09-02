@@ -69,12 +69,14 @@ def _ev_text(n: int) -> list[str]:
     opts = ("(A) Left and Middle (B) Middle and Right (C) Left and Right. "
             'Answer with the option text, e.g. "Left and Middle".')
     return [
-        # V0 = original (from run_state_rev_audit.event_question_text)
+        # V0 = byte-identical to run_state_rev_audit.event_question_text
+        # (cross-check: V0 accuracy should match Stage 2 2fps event accuracy)
         (f"Three identical cups are at the fixed positions Left, Middle and "
          f"Right. {n} swap(s) have happened in this video. Focus on the swap "
          f"that just happened, i.e. the last (most recent) swap shown in "
          f"this video. Which two positions were swapped in that last swap? "
-         + opts),
+         "(A) Left and Middle (B) Middle and Right (C) Left and Right. "
+         'Answer with the option text, e.g. "Left and Right".'),
         # V1
         (f"Three identical cups are at the fixed positions Left, Middle and "
          f"Right. {n} swap(s) have happened in this video. Look at the most "
