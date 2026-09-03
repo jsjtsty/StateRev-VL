@@ -6,16 +6,18 @@ Adds:
   1. frame -> video-token mapping (derived from the Qwen3-VL video processor:
      uniform linspace sampling + temporal-major patchify).
   2. matched temporal manipulations of the CURRENT swap window (freeze /
-     shuffle / matched-history-freeze) that preserve total frame count, frame
-     positions and the processor token budget, implemented at the SAMPLED-frame
-     level and re-rendered with identity sampling.
+      shuffle / matched-history-freeze) that preserve clip length, frame
+      positions (-> timestamp tokens), the processor token budget (grid) and
+      input_ids; they are applied at the SOURCE-clip frame level (replacing
+      frames at the processor's linspace sample positions) and rendered with the
+      SAME regime via render_inputs, so the manipulated input differs from the
+      baseline ONLY in the intended patches.
   3. multi-token-position hidden-state extraction (for the token sweep).
-  4. fingerprint + validation helpers proving the manipulated input keeps the
-     same grid / input_ids and differs only in the intended patches.
+  4. token-region identification (question / 'currently' / video /
+     current-window / pre-window) for the token-position sweep.
 
-All behavior / hidden / intervention paths MUST go through render_inputs
-(pipeline) for the baseline and through render_manipulated (here) for the
-manipulated conditions, and every forward records a fingerprint.
+All behavior / hidden / intervention paths go through render_inputs
+(pipeline); every forward records a fingerprint.
 """
 from __future__ import annotations
 
@@ -64,13 +66,6 @@ def window_sample_mask(clip_len: int, t: int, num_frames: int) -> np.ndarray:
     idx0 = sampled_indices(clip_len, num_frames)
     w0, w1 = swap_window_frames(clip_len, t)
     return (idx0 >= w0) & (idx0 < w1)
-
-
-def video_token_blocks(grid_t: int, grid_hw: int) -> np.ndarray:
-    """Map each sampled frame (0..num_frames-1) to the video-token block
-    [t_idx*grid_hw, (t_idx+1)*grid_hw) it belongs to. Returns, for each sampled
-    frame i, the integer block index b(i)=i//TEMPORAL_PATCH."""
-    return None  # placeholder; block of frame i is i // TEMPORAL_PATCH
 
 
 # ---------------------------------------------------------------------------
