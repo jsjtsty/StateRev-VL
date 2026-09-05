@@ -88,6 +88,8 @@ def build_manipulated_clip(clip: np.ndarray, t: int, regime: str,
     conditions:
       baseline        : clip unchanged
       freeze          : all current-window sample frames -> first window frame
+      no_current_event: all current-window sample frames -> last sampled
+                        history frame (the current event is absent)
       shuffle         : current-window sample frames permuted (same image set)
       history_freeze  : freeze min(|W|,|H|) EARLIEST history sample frames to
                         the first history frame (matched generic corruption);
@@ -115,6 +117,14 @@ def build_manipulated_clip(clip: np.ndarray, t: int, regime: str,
         clip1[idx0[W]] = target
         meta["n_corrupted"] = int(len(W))
         meta["frozen_to_clip_frame"] = int(idx0[i0])
+    elif condition == "no_current_event":
+        if len(H) == 0:
+            raise ValueError("no_current_event requires at least one history frame")
+        target = clip[idx0[int(H[-1])]]
+        clip1[idx0[W]] = target
+        meta["n_corrupted"] = int(len(W))
+        meta["repeated_history_sample_idx"] = int(H[-1])
+        meta["repeated_history_clip_frame"] = int(idx0[int(H[-1])])
     elif condition == "shuffle":
         rng = np.random.default_rng(seed)
         frames = clip[idx0[W]]
@@ -133,6 +143,48 @@ def build_manipulated_clip(clip: np.ndarray, t: int, regime: str,
     else:
         raise KeyError(condition)
     return clip1, meta
+
+
+def transplant_sampled_window(target_clip: np.ndarray, source_clip: np.ndarray,
+                              t: int, regime: str, *,
+                              destination: str = "current",
+                              temporal_shuffle: bool = False,
+                              seed: int = 20260902):
+    """Copy source sampled frames into target sampled slots.
+
+    Both clips must be the same prefix length.  ``destination=current`` is
+    the raw visual event transplant; ``destination=history`` is its matched
+    historical-window control.  Copying at the exact processor sample
+    indices preserves all unsampled pixels and all timestamp/token slots.
+    """
+    if len(target_clip) != len(source_clip):
+        raise ValueError("source/target prefixes must have identical lengths")
+    n = expected_frames(regime, len(target_clip))
+    idx0 = sampled_indices(len(target_clip), n)
+    current = np.where(window_sample_mask(len(target_clip), t, n))[0]
+    history = np.where(~window_sample_mask(len(target_clip), t, n))[0]
+    if len(current) == 0 or len(history) == 0:
+        raise ValueError("transplant requires non-empty current and history slots")
+    if destination == "current":
+        dest = current
+    elif destination == "history":
+        dest = history[-len(current):] if len(history) >= len(current) else history
+    else:
+        raise KeyError(destination)
+    src = current[:len(dest)]
+    if temporal_shuffle:
+        src = src[np.random.default_rng(seed).permutation(len(src))]
+    out = target_clip.copy()
+    out[idx0[dest]] = source_clip[idx0[src]]
+    return out, {
+        "destination": destination,
+        "destination_sample_idx": dest.tolist(),
+        "source_sample_idx": src.tolist(),
+        "destination_clip_frames": idx0[dest].tolist(),
+        "source_clip_frames": idx0[src].tolist(),
+        "n_transplanted": int(len(dest)),
+        "temporal_shuffle": bool(temporal_shuffle),
+    }
 
 
 def patch_diff_mask(baseline_pv, manip_pv) -> np.ndarray:
