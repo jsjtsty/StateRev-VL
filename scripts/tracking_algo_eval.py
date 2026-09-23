@@ -44,6 +44,12 @@ def question(item, variant):
         opts = ' '.join(f'({l}) {p}' for l, p in zip(letters, names))
         start = f'At the start, the ball is under cup {item["init"] + 1}. '
         where = 'Cups are numbered 1 to %d from left to right. ' % n
+    if item.get('task') == 'card':
+        q = ('The video shows three playing cards face up, then they are turned face down and swapped several times. ')
+        if variant == 'init':
+            q += f'At the start, the Queen of Hearts is the {POS3[item["init"]]} card. '
+        q += 'Where is the Queen of Hearts at the end of the video? (A) Left (B) Middle (C) Right. Answer with only the letter.'
+        return q, 'ABC'
     kind = 'identical cups' if not item.get('cup_color_names') else 'cups of different colors'
     q = (f'The video shows a shell game with {n} {kind}. A red ball is placed under one cup, '
          f'then the cups are swapped several times. ')

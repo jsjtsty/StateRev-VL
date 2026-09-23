@@ -219,3 +219,26 @@ Findings:
 - Remaining D3 errors come from written composition over 5 steps (text-only CoT: k=5 0.84, k=6 0.76).
 - An alternative "state lines + stated rule" prompt was worse (0.19–0.38; possibly a parsing issue, not investigated).
 
+
+### 6e. Label-free perceive-then-reason on real VET-Bench (no swap windows from metadata)
+
+**Segmentation.** Segments are cut model-free at local minima of pixel-motion energy (min separation 1 s for cup, 1.5 s for card) and at motion onsets/offsets. Segments shorter than 0.5 s are dropped.
+
+**Per-segment questions.** Each remaining segment gets two questions:
+1. "do two cups swap? yes/no";
+2. if yes, "which two?" (3-way).
+
+A first version used a single 4-way question that included "no swap". It failed: Qwen3.5 collapsed to answer A, and 27B called the 0.4 s cup-lowering segment a swap. That version was replaced; its results are in `*_autoseg.jsonl`.
+
+| model / task | swap sequence exactly right | D1 (exact rule) | D3 (written reasoning) | native |
+|---|---|---|---|---|
+| Qwen3.5-9B, cup | **1.00** | 1.00 | **0.92** | 0.30 |
+| Qwen3.5-9B, card | 0.92 | 0.92 | 0.74 | 0.38 |
+| Qwen3.6-27B, cup | 0.78 | 0.80 | 0.80 | 0.30 |
+| Qwen3.6-27B, card | 0.76 | 0.80 | 0.80 | 0.32–0.38 |
+| Qwen3-VL-8B, cup | 0.00 | 0.28 | 0.20 | 0.38 |
+| Qwen3-VL-8B, card | 0.18 | 0.56 | 0.52 | 0.30–0.38 |
+
+- The start position is perceived from the video in all cases (100%). `vis` equals `init` everywhere.
+- 27B's errors come from the yes/no detector answering "no" on real swaps. With oracle windows, 27B is 1.00.
+- Qwen3.5 card: D3 < D1. The written composition for cards loses 0.18 against the exact rule.
