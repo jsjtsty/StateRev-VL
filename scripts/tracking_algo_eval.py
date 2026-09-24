@@ -21,6 +21,9 @@ DATA = ROOT / 'outputs/tracking_algo_v1/data'
 
 MODEL_CFG = {
     'qwen3vl8b': dict(path='Qwen3-VL-8B-Instruct', family='qwen3vl'),
+    'qwen3vl2b': dict(path='Qwen3-VL-2B-Instruct', family='qwen3vl'),
+    'qwen3vl4b': dict(path='Qwen3-VL-4B-Instruct', family='qwen3vl'),
+    'qwen3vl32b': dict(path='Qwen3-VL-32B-Instruct', family='qwen3vl'),
     'qwen3vl8b_think': dict(path='Qwen3-VL-8B-Thinking', family='qwen3vl', thinking=True),
     'qwen25vl7b': dict(path='Qwen2.5-VL-7B-Instruct', family='qwen25vl'),
     'llava_video7b': dict(path='LLaVA-NeXT-Video-7B-hf', family='llava', max_frames=16),

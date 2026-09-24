@@ -211,3 +211,256 @@ F_MVR > 0.7.
 
 - **H9 (state carried on the video tokens and read by the last token)**: for at least one l ≤ 24, `post` patching makes the L24 probe predict the SOURCE state in > 70% of pairs, while the same-state control leaves the probe at its unpatched accuracy (±10 pts).
 - **H10 (readout gap)**: under the same `post` patch, the native answer switches to the source state in < 20% of pairs. The source-minus-target logit margin shift is reported with a bootstrap CI.
+
+## Addendum H: two-swap causal patching (Qwen3-VL-8B), written before running
+
+### Data
+
+`data_patch2/` (seed 20261003), 960 videos: reveal, swap 1, swap 2 (independent random pairs), identical timing.
+- The first 480 fit last-token probes (L24 and L36) for S1, S2 (final), pair1 and pair2. Their CV accuracies are reported.
+- The last 480 are targets.
+
+### Sources
+
+| source | same as target | differs in |
+|---|---|---|
+| `dp2` | init and pair1 | pair2, and the final state |
+| `dp1` | init and pair2 | pair1, and S1 |
+
+### Patching
+
+Target video-token activations are replaced with the source's at L8 or L16, on the tokens of swap 1, the tokens of swap 2, or the tokens after swap 2.
+
+### Hypotheses (L16, primary)
+
+- **H11a (each swap's own tokens carry its event to the query)**:
+  - dp2 + swap2 patch → last-token pair2 probe reports the source pair in > 70% of pairs;
+  - dp1 + swap1 patch → last-token S1 probe reports the source S1 in > 70% of pairs.
+- **H11b (no composition across the two swaps at the query)**: under dp1 + swap1 patch, the final-state (S2) probe follows the source's S2 no more often than under the unpatched baseline, within 10 points. The same holds for dp2 + swap2.
+
+### Also reported
+
+Native answer changes, and all other conditions.
+
+## Addendum I: final state vs number of swaps, adequately powered (written before running)
+
+### Motivation
+
+Two things disagree:
+- The Addendum H probe CV shows the final state after 2 swaps is decodable at the last token: 0.94 (n=480, Qwen3-VL L24).
+- Earlier per-k last-token analyses (n=60–90) and intermediate-state analyses (S_j inside longer videos) suggested collapse after one step.
+
+The earlier "one-step horizon" statements may partly reflect low power, or intermediate vs final states.
+
+### Data
+
+`data_finalk/` (seed 20261004): reveal + k random swaps, k = 1–4, 600 per k.
+
+### Analysis
+
+Per k, last-token 5-fold CV decodability of the final state, at every extracted layer, for Qwen3-VL-8B and Qwen3.5-9B. Also the video tokens right after the last swap.
+
+### Prediction (current best guess)
+
+Decodability decreases with k. The key quantity is where it reaches chance. No hard threshold is pre-committed; this addendum is descriptive and corrects the earlier estimates.
+
+## Addendum J: appearance re-identification vs motion tracking (written before generating data)
+
+### Motivation
+
+Section 6h of the log shows the following, using held-out-history probes:
+- Identical opaque cups: no location code for the occluded ball.
+- Colored cups: a partial late-layer code that tracks native accuracy (27B: 0.81 / 0.65).
+
+Hypothesis R: all apparent tracking is appearance re-identification. The model binds the ball to the cup's appearance at the reveal and finds that appearance in the final layout. It uses no motion.
+
+### Data
+
+`data_reid/` (seed 20261005): 300 sequences, k ∈ {2, 3, 4} (100 each), random init and pairs. Three conditions per sequence:
+- **C-full**: 3 distinct cup colors (random permutation of blue/green/yellow), normal video.
+- **C-teleport**: identical frames to C-full except the swap period, which shows the last pre-swap frame. The final layout appears abruptly after it, so there is no motion information. Duration and colors are identical.
+- **I-full**: identical cups, normal video.
+
+The question is the same as for colored3/opaque3, with variant `init`.
+
+### Measures
+
+- Native accuracy for Qwen3-VL-8B, Qwen3.5-9B and Qwen3.6-27B.
+- Last-token final-location code: held-out-history GroupKFold over (init, pairs) tuples, at every extracted layer (best layer reported, plus fixed late layers: Qwen3-VL L28, Qwen3.5 L32, 27B L49), for Qwen3-VL-8B and 27B.
+
+### Predictions
+
+- **J1 (re-id is sufficient)**: for 27B and Qwen3-VL, native accuracy on C-teleport ≥ C-full − 0.10.
+- **J2 (motion adds nothing to the internal code)**: held-out code on C-teleport ≥ C-full − 0.10 at the fixed late layer.
+- **J3 (control)**: I-full native accuracy and code are within 0.10 of chance.
+
+Hypothesis R is rejected if C-full exceeds C-teleport by more than 0.10 on native accuracy for 27B (which uses motion) or on the code.
+
+### Note
+
+This is a paired design. The paired difference is reported with a bootstrap 95% CI.
+
+## Addendum K: what in the swap video hurts the location code? (written before generating data)
+
+### Data
+
+`data_reid2/` (seed 20261006): 300 new sequences, k ∈ {2, 3, 4}, colored cups. Five conditions share the reveal and the final static segment; they differ only in the swap period:
+
+| condition | swap period shows |
+|---|---|
+| full | continuous motion through the intermediate layouts |
+| steps | each intermediate layout held static for the swap's duration, jumping at each swap (intermediate layouts, no continuous motion) |
+| tele | the initial layout, frozen (as in Addendum J) |
+| telefinal | the final layout, from the start of the swap period |
+| blank | the background and table only, with no cups |
+
+### Measures
+
+Held-out-history last-token code at the fixed late layer, and native accuracy. Models: Qwen3-VL-8B and Qwen3.5-9B.
+
+### Predictions
+
+- **K1 (intermediate layouts interfere)**: steps ≈ full (within 0.10), and both < tele.
+- **K1' (continuous motion specifically interferes)**: steps ≈ tele, and both > full.
+- **K2 (prolonged initial layout is not the cause)**: telefinal and blank ≥ tele − 0.10.
+
+If instead tele > telefinal and tele > blank, then the extra initial-layout exposure (binding strength) explains the Addendum J effect.
+
+## Addendum L: dwell time vs recency in reporting the present (written before generating data)
+
+### Data
+
+`data_now/` (seed 20261007): colored cups, reveal, then a sequence of STATIC layouts with abrupt changes, and no motion.
+- Each video has m = 3 layouts after the reveal layout: L1, L2, L3 (random distinct permutations).
+- Dwell times:
+  - L1: 1.0 s;
+  - L2 (penultimate): D_pen ∈ {0.5, 2.0} s;
+  - L3 (final): D_fin ∈ {0.5, 1.0, 2.0, 4.0} s.
+- 8 dwell cells × 60 videos = 480. The queried position p is random and chosen so that L2 and L3 differ at p.
+
+### Question
+
+"At the very end of the video, what color is the cup in the <p> position?" Scored with letters.
+
+### Measures
+
+Accuracy, and P(answer = L2's color at p), per cell. Models: Qwen3-VL-8B, Qwen3.5-9B.
+
+### Predictions
+
+- **L1 (dwell weighting)**: accuracy increases with D_fin/D_pen. When D_fin < D_pen, P(L2) exceeds P(L3).
+- **L1' (recency failure independent of dwell)**: P(L2) stays > 0.1 even at D_fin = 4 s with D_pen = 0.5 s.
+
+Both can hold. The analysis is descriptive, with Wilson CIs per cell.
+
+### Addendum L results (Qwen3-VL-8B / Qwen3.5-9B; n=60 per cell)
+
+- Accuracy rises with D_fin, from 0.45–0.58 at 0.5 s to 0.83–0.93 at 4 s. D_pen has only a small effect.
+- With equal dwell (0.5 s / 0.5 s), P(pen) is 0.35–0.38.
+- **L1 is supported** (graded by D_fin). **L1' is not supported**: P(pen) at D_fin = 4 s, D_pen = 0.5 s is 0.07–0.08, below the 0.1 threshold.
+- A conflict with Addendum K: in "tele", the initial layout dwells 4–7 s before a 0.75 s final layout, yet accuracy is 0.87–0.98. The number of prior layouts may matter. Addendum M tests this.
+
+## Addendum M: number of prior layouts × final dwell × input mode (written before generating data)
+
+### Data
+
+`data_now2/` (seed 20261008), colored static layouts with abrupt changes:
+- The reveal layout L0 (2.5 s) is followed by m further layouts, the last of which is the final one.
+- Each non-final layout after L0 is held for 1.0 s.
+- m ∈ {1, 2, 4}; D_fin ∈ {0.5, 1.0, 2.0} s; 60 videos per cell (540 total).
+- The query position differs between the penultimate and final layouts.
+
+### Input modes
+
+- (a) video, as before;
+- (b) the same frames as separate images, each preceded by "Frame i (t s):". There is no temporal token merging.
+
+Models: Qwen3-VL-8B and Qwen3.5-9B.
+
+### Predictions
+
+- **M1 (interference grows with the number of prior layouts)**: at D_fin = 0.5 s, accuracy for m=4 < m=1 by more than 0.15.
+- **M2 (not a temporal-merging artifact)**: the image-list mode shows the same D_fin and m trends, with a stale rate at D_fin = 0.5 s > 0.2.
+- If image-list mode removes the effect (accuracy ≥ 0.9 everywhere), the phenomenon is attributed to video tokenization.
+
+## Addendum N: is the stale present general? Minimal displays (written before generating data)
+
+### Data
+
+`data_now3/` (seed 20261009), two minimal tasks with abrupt changes and no occlusion or motion:
+- **digit**: a large black digit on a white background. The digits change m times, each non-final digit held 1.0 s, consecutive digits distinct.
+- **ball**: one red ball on a table at left, middle or right; it jumps between positions, with consecutive positions distinct.
+
+Design: m ∈ {1, 3} changes after the first item (shown 1.0 s); D_fin ∈ {0.25, 0.5, 1.0, 2.0} s; 50 videos per cell per task (800 total).
+
+### Question
+
+"What digit is shown at the very end of the video?" / "Where is the ball at the very end of the video?"
+- digit: three options (final, penultimate, one other), in shuffled letter order;
+- ball: Left/Middle/Right.
+
+### Measures
+
+Accuracy, and P(penultimate), per cell. Models: Qwen3-VL-8B, Qwen3.5-9B (video mode).
+
+### Predictions
+
+- **N1 (general stale present)**: at D_fin ≤ 0.5 s, P(penultimate) > 0.2 in both tasks.
+- **N2**: accuracy increases with D_fin.
+
+If both tasks are at ≥ 0.95 everywhere, the stale present is specific to multi-object layouts (binding), not a general temporal failure.
+
+### Addendum N result
+
+N1 is falsified. Single digit and single ball displays score 0.92–1.00 for both models in all cells.
+
+## Addendum O: temporal binding interference in minimal displays (written before generating data)
+
+### Data
+
+`data_now4/` (seed 20261010). Three slots on a table hold n colored disks (red, blue, green; n ∈ {1, 2, 3}; empty slots allowed when n < 3).
+- Layouts change abruptly m=3 times after a 1.0 s first layout. Non-final layouts are held 1.0 s; the final one D_fin ∈ {0.5, 2.0} s.
+- Consecutive layouts differ.
+- 50 videos per (n, D_fin, query) cell.
+
+### Queries
+
+- **Q-pos**: "At the very end, what is in the <p> position?" Options are the colors plus "nothing" when n < 3. p is chosen so the content at p differs between the penultimate and final layouts.
+- **Q-obj**: "At the very end, where is the <color> disk?" (Left/Middle/Right). The color is chosen so its position differs between the penultimate and final layouts.
+
+For n=1, Q-obj equals Addendum N's ball task.
+
+### Measures
+
+Accuracy and P(penultimate), per cell. Models: Qwen3-VL-8B, Qwen3.5-9B (video mode).
+
+### Predictions
+
+- **O1 (binding interference)**: at D_fin = 0.5 s, accuracy for n=3 is lower than for n=1 by > 0.15 on at least one query type, with errors concentrated on the penultimate layout.
+- **O2**: n=2 is intermediate.
+
+If n=3 minimal disks show no effect (≥ 0.9), the cup effect depends on cup-specific appearance (e.g., similar cup shapes), not binding per se.
+
+### Addendum O result
+
+O1 is supported for object-keyed queries. Position-keyed queries fail even at n=1 (see NIGHT_LOG 7e).
+
+## Addendum P: last-frame anchoring (training-free fix), written before running
+
+### Method
+
+The same video input, followed by the final frame as a separate image and the text "The last frame of the video is shown above." The question is unchanged.
+
+### Test sets
+
+- O (all cells);
+- M (m=4, all D_fin);
+- K full and steps: the original shell-game question, "which cup contains the ball".
+
+Models: Qwen3-VL-8B, Qwen3.5-9B.
+
+### Predictions
+
+- **P1**: on O and M, accuracy ≥ 0.9 in every cell, and P(pen) ≤ 0.05.
+- **P2**: on K full, native ball accuracy improves by > 0.15 for Qwen3-VL. The appearance route then only needs the ball-cup color (bound at 0.97–1.00) and the final layout.
+- **P3 (control)**: I-full (identical cups, Addendum J data) stays at chance (≤ 0.40). The fix cannot create motion tracking.

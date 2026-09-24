@@ -51,6 +51,7 @@ def main():
     ap.add_argument('--task', default='cup', choices=['cup', 'card'])
     ap.add_argument('--min-sep', type=float, default=1.0, help='minimum spacing (s) between motion minima')
     ap.add_argument('--min-dur', type=float, default=0.5, help='segments shorter than this (s) are not swaps')
+    ap.add_argument('--det2', action='store_true', help='two-phrasing swap detection (no-swap only if both say no)')
     ap.add_argument('--device-map', default='cuda:0')
     ap.add_argument('--out', type=Path, default=ROOT / 'outputs/tracking_algo_v1/vetbench_method')
     a = ap.parse_args()
@@ -87,7 +88,7 @@ def main():
         sc = {l: float(max(lg[i] for i in lid[l])) for l in letters}
         return letters.index(max(sc, key=sc.get))
 
-    path = a.out / f'{a.model}_autoseg2{"" if a.task == "cup" else "_card"}{"" if a.min_sep == 1.0 else f"_sep{a.min_sep}"}.jsonl'
+    path = a.out / f'{a.model}_autoseg2{"" if a.task == "cup" else "_card"}{"" if a.min_sep == 1.0 else f"_sep{a.min_sep}"}{"_det2" if a.det2 else ""}.jsonl'
     t0 = time.time()
     with open(path, 'w') as f:
         for n, (tid, init, gt, true_events) in enumerate(videos):
@@ -102,7 +103,13 @@ def main():
                 clip = frames[max(s - 6, 0):min(t + 6, len(frames))][::FPS // 8]
                 q1 = (f'The video shows 3 {items_word} in a row. Do two of the {w} swap their positions in this clip? '
                       f'(A) Yes (B) No. Answer with only the letter.')
-                if ask(clip, q1, lid2, 'AB') == 1:
+                no = ask(clip, q1, lid2, 'AB') == 1
+                if no and a.det2:
+                    # second phrasing; call it "no swap" only if both phrasings say no
+                    q1b = (f'The video shows 3 {items_word} in a row. In this clip, do any two {w} move and exchange places? '
+                           f'(A) Yes (B) No. Answer with only the letter.')
+                    no = ask(clip, q1b, lid2, 'AB') == 1
+                if no:
                     labels.append(3)
                     continue
                 q2 = (f'The video shows 3 {items_word} in a row. Two of the {w} swap their positions. '
