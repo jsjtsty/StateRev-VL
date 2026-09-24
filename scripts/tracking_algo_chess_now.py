@@ -83,6 +83,51 @@ def generate():
     print(len(items))
 
 
+def generate_hist():
+    D = ROOT / 'outputs/tracking_algo_v1/data_chess_hist'
+    D.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(20261012)
+    games = pd.read_parquet(ROOT / 'dataset/MET-Bench-Chess/evaluation-test.parquet')
+    items = []
+    for m in (1, 3):
+        for dfin in (0.5, 2.0):
+            j = 0
+            while j < 60:
+                g = games.iloc[int(rng.integers(len(games)))]
+                states = list(g['states'])
+                if len(states) < m + 2:
+                    continue
+                t = int(rng.integers(m, len(states)))
+                mv = chess.Move.from_uci(g['actions'][t - 1])
+                b0, b_pen, b_fin = chess.Board(states[t - m]), chess.Board(states[t - 1]), chess.Board(states[t])
+                victim = b_pen.piece_at(mv.to_square)
+                if victim is None:
+                    continue
+                vname = pname(victim.symbol())
+                if sum(pname(p.symbol()) == vname for p in b0.piece_map().values()) != 1:
+                    continue
+                if b0.piece_at(mv.to_square) is None or pname(b0.piece_at(mv.to_square).symbol()) != vname:
+                    continue          # victim must stand on the capture square at the window start
+                fin = pname(b_fin.piece_at(mv.to_square).symbol())
+                others = sorted({pname(p.symbol()) for p in b_fin.piece_map().values()} - {fin, vname})
+                if not others:
+                    continue
+                opts = [fin, vname, others[int(rng.integers(len(others)))]]
+                rng.shuffle(opts)
+                frames = [np.repeat(render(states[i])[None], FPS, 0) for i in range(t - m, t)]
+                frames.append(np.repeat(render(states[t])[None], int(round(dfin * FPS)), 0))
+                fr = np.concatenate(frames)[::2]
+                vid = f'H_m{m}_f{dfin}_{j:02d}'
+                np.savez_compressed(D / f'{vid}.npz', frames=fr)
+                items.append({'id': vid, 'm': m, 'dfin': dfin, 'victim': vname, 'options': [str(o) for o in opts],
+                              'gt': opts.index(fin), 'pen': opts.index(vname), 'n_frames': int(len(fr)), 'sample_fps': 4.0})
+                j += 1
+    with open(D / 'items.jsonl', 'w') as f:
+        for r in items:
+            f.write(json.dumps(r) + '\n')
+    print(len(items))
+
+
 def evaluate(model_key, device_map, image_only):
     import torch
     from tracking_algo_eval import load, build_inputs, letter_ids
@@ -122,6 +167,9 @@ def evaluate(model_key, device_map, image_only):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('--model'); ap.add_argument('--device-map', default='cuda:0')
-    ap.add_argument('--image-only', action='store_true'); ap.add_argument('--captures', action='store_true')
+    ap.add_argument('--image-only', action='store_true'); ap.add_argument('--captures', action='store_true'); ap.add_argument('--hist', action='store_true')
     a = ap.parse_args()
-    generate() if not a.model else evaluate(a.model, a.device_map, a.image_only)
+    if '--hist' in sys.argv:
+        generate_hist()
+    else:
+        generate() if not a.model else evaluate(a.model, a.device_map, a.image_only)

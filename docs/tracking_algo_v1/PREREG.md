@@ -464,3 +464,120 @@ Models: Qwen3-VL-8B, Qwen3.5-9B.
 - **P1**: on O and M, accuracy ≥ 0.9 in every cell, and P(pen) ≤ 0.05.
 - **P2**: on K full, native ball accuracy improves by > 0.15 for Qwen3-VL. The appearance route then only needs the ball-cup color (bound at 0.97–1.00) and the final layout.
 - **P3 (control)**: I-full (identical cups, Addendum J data) stays at chance (≤ 0.40). The fix cannot create motion tracking.
+
+## Addendum Q: causal test of "recency heads" (Qwen3-VL-8B), written before running
+
+### Heads
+
+The top-8 heads (layers 24–27) are selected on the Addendum M data. They are ranked by the difference in last-token final-share attention between correct and stale trials, and saved in `recency_heads_qwen3vl8b.json`.
+
+### Test data
+
+Independent of the selection set: Addendum L data (`data_now`, 480 videos).
+
+### Interventions
+
+Attention-logit bias on the LAST query position only, in the selected heads (eager attention):
+- (a) **suppress-pen**: −1e4 on keys of the penultimate layout's video tokens;
+- (b) **random-heads**: the same intervention on 8 random heads from layers 20–30 (seed 0), excluding the selected ones;
+- (c) **suppress-final**: −1e4 on the final layout's keys, in the selected heads.
+
+### Predictions
+
+- **Q1**: (a) raises accuracy by > 0.10 averaged over D_fin ∈ {0.5, 1.0}, and lowers P(pen).
+- **Q2**: (b) changes accuracy by < 0.05.
+- **Q3**: (c) lowers accuracy by > 0.10.
+
+## Addendum R: the stale present on real chess games (written before generating data)
+
+### Data
+
+`data_chess/` (seed 20261011): windows from MET-Bench-Chess evaluation games (real MillionBase move sequences).
+- Boards are rendered with piece glyphs and file/rank labels, 448×448.
+- A window shows positions P_{t−m} … P_t:
+  - each non-final position is held 1.0 s;
+  - the final position is held D_fin ∈ {0.5, 2.0} s;
+  - m ∈ {1, 3} moves.
+- Query square, 50 videos per cell (400 total):
+  - **src**: the source square of the last move (final: empty; penultimate: the moved piece);
+  - **dst**: the destination square of the last move (final: the moved piece; penultimate: empty or the captured piece).
+
+### Question
+
+"The video shows a chess game. At the very end of the video, what is on square <sq>?" Three options, in shuffled order: the final content, the penultimate content, and one other piece present on the board.
+
+### Controls
+
+Last frame alone (image-only).
+
+### Models
+
+Qwen3-VL-8B, Qwen3.5-9B, Qwen3-VL-32B, Qwen3.6-27B.
+
+### Predictions
+
+- **R1**: for Qwen3-VL-8B and Qwen3.5-9B at m=3, D_fin = 0.5 s, video accuracy is lower than image-only by > 0.15, with P(pen) > 0.2.
+- **R2**: m=1 is closer to image-only than m=3.
+
+## Addendum S: training-free fixes for the stale present (written before running)
+
+Both methods are label-free. The last scene change t_c is detected from pixels: the last frame index whose mean absolute difference to the previous frame exceeds 2% of the maximum intensity. Both are applied only to questions about "the very end".
+
+### Methods
+
+- **CPM (change-point masking; Qwen3-VL only, mechanism-driven).** In layers 18–26, text positions after the video cannot attend to video tokens of temporal groups that end before t_c. Nothing else changes.
+- **PCD (present-contrastive decoding; any model).** score = log p(answer | full video) − α · log p(answer | video truncated to frames[:t_c]), with α = 1 pre-registered (α = 0.5 also reported). The truncated video contains only the past, so answers favored by the past are penalized.
+
+### Baselines
+
+- native;
+- last-frame anchoring (Addendum P);
+- image-only (an oracle that discards the history).
+
+### Test sets
+
+- chess captures (`data_chess_cap`, 400);
+- O (obj n=3, pos n=1, pos n=3; 300);
+- M (m=4; 180).
+
+### Models
+
+- CPM: Qwen3-VL-8B.
+- PCD: Qwen3-VL-8B, Qwen3.5-9B, Qwen3-VL-32B, and the newly downloaded non-Qwen-vision models (LLaVA-OneVision-7B, InternVL3.5-8B), if their image-only accuracy is ≥ 0.8.
+
+### Predictions
+
+- **S1**: CPM raises Qwen3-VL-8B accuracy on chess captures (D_fin 0.5) by > 0.2, and P(pen) falls below 0.15.
+- **S2**: PCD (α = 1) raises accuracy by > 0.1 averaged over the three sets for each model with a stale gap > 0.15.
+- **S3 (no-harm control)**: on single-object displays (Addendum N, digit and ball), both methods keep accuracy ≥ 0.9.
+
+## Addendum T: history + present chess questions (written before generating data)
+
+### Motivation
+
+On "what is on square X at the end", PCD reaches the image-only ceiling. To show value beyond "look at the last frame", we need questions whose answer requires the history AND the present.
+
+### Data
+
+`data_chess_hist/` (seed 20261012): MET-Bench-Chess windows ending with a capture, m ∈ {1, 3}, D_fin ∈ {0.5, 2.0}, 60 per cell.
+- The captured piece must be unique by color and type on the window's first board, e.g. the only black queen, so it can be named unambiguously.
+
+### Question
+
+"At the very end of the video, what is on the square where the <color type> stood at the beginning of the video?"
+- Answer: the capturing piece.
+- Penultimate (stale) answer: the captured piece itself.
+- Options: capturing piece, captured piece, and one other piece on the final board, shuffled.
+
+### Conditions
+
+- native;
+- PCD α=1;
+- image-only (last frame, with the same question rephrased to "the square where the <piece> stood before"). The image carries no history, so the model must guess.
+
+Models: Qwen3-VL-8B, Qwen3-VL-32B, Qwen3.5-9B.
+
+### Predictions
+
+- **T1**: native P(stale) > 0.3 for Qwen3-VL-8B at D_fin = 0.5.
+- **T2**: PCD α=1 exceeds both native and image-only by > 0.15 for the models where T1 holds.

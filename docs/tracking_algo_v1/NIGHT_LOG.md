@@ -809,3 +809,112 @@ Question: "what is on square <capture square> at the end?" Options: the capturin
 - Qwen3.5-9B, non-capture dst, video: 0.94–0.98.
 
 Summary of the chess result: a clear stale present for Qwen3-VL 8B and 32B, a mild one for Qwen3.5-9B (only m=3), and none for Qwen3.6-27B.
+
+## 8. Training-free fixes (Addendum S)
+
+The change detector was amended before any outcome-driven tuning. The original mean-difference threshold missed single-piece chess moves, and PCD there equaled native. It now marks a new state when > 0.1% of pixels change by > 40 levels. All results below use the amended detector.
+
+**Qwen3-VL-8B.** Accuracy (P(pen)); the image-only column is the ceiling from 7g/7p.
+
+| cell | native | CPM (L18–26) | PCD α=1 | PCD α=0.5 | image only |
+|---|---|---|---|---|---|
+| chess m=1, D_fin 0.5 | 0.20 (0.78) | 0.72 (0.25) | **0.84 (0.04)** | 0.53 | 0.86 |
+| chess m=1, D_fin 2.0 | 0.48–0.52 | 0.83 | 0.90 | 0.76 | 0.88 |
+| chess m=3, D_fin 0.5 | 0.36 (0.59) | 0.66 (0.28) | 0.74 (0.12) | 0.44 | 0.81 |
+| chess m=3, D_fin 2.0 | 0.45 | 0.88 | 0.89 | 0.68 | 0.90 |
+| O pos n=1, D_fin 0.5 | 0.54 | 0.80 | 0.78 | 0.62 | 1.00 |
+| O pos n=3, D_fin 0.5 | 0.60 | 0.88 | 0.92 | 0.80 | 1.00 |
+| O obj n=3, D_fin 0.5 | 0.50 | **0.94** | **0.94** | 0.84 | 1.00 |
+| M m=4, D_fin 0.5 | 0.38–0.40 | **0.90** | 0.87 | 0.60 | 1.00 |
+| M m=4, D_fin 1.0 | 0.70 | 0.97 | 0.98 | 0.90 | 1.00 |
+| N digit / ball (no-harm control) | 0.96–1.00 | 1.00 | 1.00 | 0.96–1.00 | — |
+
+**Verdicts**
+- S1 is partly supported: chess improves by +0.3 to +0.5, but P(pen) stays at 0.25–0.28, above the 0.15 threshold.
+- S2 is supported for Qwen3-VL-8B. Other models are running.
+- S3 is supported: no harm on the single-item controls.
+
+**Both fixes bring "end-state" questions close to the image-only ceiling.** Their value beyond "just look at the last frame" must be shown on tasks that need both history and present, such as the colored shell game (next).
+
+**PCD, other models.** Native → PCD α=1; P(pen) in brackets.
+
+| cell | Qwen3.5-9B | Qwen3-VL-32B |
+|---|---|---|
+| chess m=1, D_fin 0.5 | 0.90 → 0.98 | 0.63 (0.35) → **0.98 (0.00)** |
+| chess m=3, D_fin 0.5 | 0.75 (0.24) → 0.94 (0.00) | 0.72 (0.27) → **0.98** |
+| O pos n=1, D_fin 0.5 | 0.72 → **1.00** | 0.46 (0.54) → **0.98** |
+| O obj n=3, D_fin 0.5 | 0.48 (0.46) → **0.96** | 0.78 → 0.96 |
+| M m=4, D_fin 0.5 | 0.58 → 0.88 | 0.80 → 0.98 |
+| N digit / ball | 1.00 → 1.00 | 0.92–1.00 → 1.00 |
+
+S2 is supported for all three Qwen models. PCD brings end-state questions to the image-only ceiling (≈ 0.94–1.00) and never hurts the controls.
+
+**History + present (colored shell game, Addendum K data; identical-cup control).** Neither fix helps:
+
+| model / set | native | PCD 1.0 | CPM | CPM-ends |
+|---|---|---|---|---|
+| Qwen3-VL-8B, K full | 0.45 | 0.43 | 0.39 | 0.43 |
+| Qwen3-VL-8B, K steps | 0.49 | 0.52 | 0.46 | 0.51 |
+| Qwen3-VL-8B, I-full (control) | 0.35 | 0.26 | 0.35 | 0.34 |
+
+- CPM-ends keeps the first static (reveal) run and the final state, masking only the middle, at L18–26 for text queries.
+- The shell-game deficit is therefore NOT the stale-present retrieval: masking intermediate layouts at the text side does not recover the "blank" advantage (0.64).
+- Consistent with 6j, the damage from intermediate layouts is already in the video-token representation, where the final-layout code is at 0.80 vs 0.99.
+- **Scope of the fixes:** they correct present-state readout. They do not repair the appearance-based location lookup that is corrupted during encoding.
+
+### 8b. Addendum T (history + present chess questions): both predictions fail, and PCD is harmful
+
+The question is "At the end, what is on the square where the <captured piece> stood at the beginning?" Accuracy (P(stale = the named captured piece)):
+
+| model / cell | native video | PCD α=0.5 | PCD α=1 | image only |
+|---|---|---|---|---|
+| Qwen3-VL-8B, m=1, D_fin 0.5 | 0.67 (0.00) | 0.68 | **0.30 (0.38)** | 0.27 (0.62) |
+| Qwen3-VL-8B, m=1, D_fin 2.0 | 0.78 (0.00) | 0.78 | 0.28 (0.33) | 0.33 (0.52) |
+| Qwen3-VL-8B, m=3, D_fin 0.5 | 0.80 (0.00) | 0.82 | 0.42 (0.42) | 0.65 (0.17) |
+| Qwen3-VL-8B, m=3, D_fin 2.0 | 0.82 (0.00) | 0.92 | **0.05 (0.92)** | 0.63 (0.10) |
+| Qwen3-VL-32B | pending | pending | pending | 0.00 (0.57–0.78) |
+| Qwen3.5-9B | pending | pending | pending | 0.08–0.17 (0.30–0.48) |
+
+**T1 fails.** When the question names the captured piece, the video answer is NEVER the stale piece: P = 0.00 in all cells. Naming the piece seems to cue that it has left the square.
+
+**T2 fails, and PCD α=1 is harmful.** Here the truncated "past" video is not a proxy for the stale answer: the question itself refers to the past. Subtracting it pushes probability onto the captured piece.
+
+**Scope of PCD.** It applies to pure present-state questions only ("what is at X at the end"). It must not be used when the question references history. α=0.5 is neutral to slightly positive here.
+
+The image-only control shows the opposite bias: without history, models pick the named piece (32B: 0.57–0.78).
+
+### 8c. Non-Qwen-vision models (InternVL3.5-8B: InternViT + Qwen3 LLM; LLaVA-OneVision-7B: SigLIP + Qwen2 LLM)
+
+**Image-only controls (last frame)**
+- Both models: 1.00 on M and on O (n = 1, 3).
+- Chess captures: InternVL 0.78–0.83; LLaVA-OV 0.60–0.73.
+
+Native video → PCD α=1:
+
+| cell | InternVL3.5-8B | LLaVA-OV-7B |
+|---|---|---|
+| M m=4, D_fin 0.5 | **0.57 (P(pen) 0.30) → 0.87** | **0.68 (0.27) → 0.95** |
+| M m=4, D_fin 1.0 | 0.83 → 0.92 | 0.68 → 0.93 |
+| O obj n=3, D_fin 0.5 | 0.96 → 0.96 | 0.70 (0.20) → 0.86 |
+| O pos n=1, D_fin 0.5 | 0.74 (0.26) → 1.00 | 0.64 (0.36) → 0.72 |
+| chess m=1 / m=3, D_fin 0.5 | 0.55 / 0.48 → 0.76 / 0.73 | 0.62 / 0.68 → 0.64 / 0.54 |
+| N digit / ball (control) | 1.00 → 1.00 | 0.98 / 0.58 → 1.00 / 0.88 |
+
+- **The stale present replicates with non-Qwen vision encoders**: M and O show image-only 1.00 vs video 0.57–0.74.
+- **PCD fixes it** on M and O for both models.
+- On chess, LLaVA-OV shows no video-vs-image gap (0.62–0.68 vs 0.60–0.73), so there is nothing to fix. InternVL shows a gap of about 0.3, closed by PCD to 0.73–0.76.
+
+**Addendum T, Qwen3.5-9B**
+- Native P(stale) is 0.18–0.28 (vs 0 for Qwen3-VL-8B).
+- PCD α=1 helps at m=1, D_fin 0.5 (0.50 → 0.82).
+- m=3 cells are low for all conditions (0.2–0.32).
+- 32B is pending.
+
+**Addendum T, Qwen3-VL-32B.** Native accuracy (P(named captured piece)) → PCD α=0.5 / α=1:
+- m=1, D_fin 0.5: 0.03 (0.82) → 0.43 / 0.62;
+- m=1, D_fin 2.0: 0.05 (0.80) → 0.32 / 0.50;
+- m=3, D_fin 0.5 and 2.0: 0.00 (0.95) → ≤ 0.02 / 0.13–0.18.
+
+32B almost always answers the named captured piece. It does the same from the final image alone (0.57–0.78), so this is at least partly name priming rather than a stale present. PCD α=1 partially counteracts it at m=1.
+
+Addendum T is model-dependent and confounded by naming the piece in the question. **It is not usable as evidence for or against PCD's value beyond the last frame.** A cleaner history + present design is needed, one that does not name the stale answer.

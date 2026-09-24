@@ -27,6 +27,8 @@ MODEL_CFG = {
     'qwen3vl8b_think': dict(path='Qwen3-VL-8B-Thinking', family='qwen3vl', thinking=True),
     'qwen25vl7b': dict(path='Qwen2.5-VL-7B-Instruct', family='qwen25vl'),
     'llava_video7b': dict(path='LLaVA-NeXT-Video-7B-hf', family='llava', max_frames=16),
+    'llava_ov7b': dict(path='llava-onevision-qwen2-7b-ov-hf', family='llava', max_frames=32),
+    'internvl35_8b': dict(path='InternVL3_5-8B-HF', family='llava', max_frames=32, square=448),
     'qwen35_9b': dict(path='Qwen3.5-9B', family='qwen35'),
     'qwen36_27b': dict(path='Qwen3.6-27B', family='qwen35'),
     'qwen36_35b_a3b': dict(path='Qwen3.6-35B-A3B', family='qwen35'),
@@ -67,6 +69,8 @@ def load(model_key, device_map):
     cfg = MODEL_CFG[model_key]
     path = MODELS / cfg['path']
     proc = AutoProcessor.from_pretrained(path)
+    if cfg.get('square'):          # InternVL: the video processor defaults to 384, the model expects 448
+        proc.video_processor.size = {'height': cfg['square'], 'width': cfg['square']}
     model = AutoModelForImageTextToText.from_pretrained(path, dtype=torch.bfloat16, device_map=device_map)
     model.eval()
     return cfg, proc, model
@@ -78,6 +82,9 @@ def build_inputs(cfg, proc, frames, text_q, fps, think=False):
     if fam == 'llava' and len(frames) > cfg['max_frames']:
         idx = np.round(np.linspace(0, len(frames) - 1, cfg['max_frames'])).astype(int)
         frames = frames[idx]
+    if cfg.get('square'):
+        import cv2
+        frames = np.stack([cv2.resize(f, (cfg['square'], cfg['square'])) for f in frames])
     msgs = [{'role': 'user', 'content': [{'type': 'video'}, {'type': 'text', 'text': text_q}]}]
     tkw = {}
     if fam == 'qwen35':
