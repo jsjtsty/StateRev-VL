@@ -581,3 +581,98 @@ Models: Qwen3-VL-8B, Qwen3-VL-32B, Qwen3.5-9B.
 
 - **T1**: native P(stale) > 0.3 for Qwen3-VL-8B at D_fin = 0.5.
 - **T2**: PCD α=1 exceeds both native and image-only by > 0.15 for the models where T1 holds.
+
+## Addendum U: history-referenced present questions that do not name the stale answer (written before generating data)
+
+### Motivation
+
+Addendum T named the stale piece and was confounded. Here the queried location is defined by the HISTORY, and the stale answer is never mentioned.
+
+### Data (seed 20261013)
+
+**U-chess (`data_chess_x/`)**: MET-Bench-Chess (full-test) windows of exactly two moves, where move 2 captures on the square where move 1 landed (an exchange).
+- Frames: P0 (1.0 s), P1 (1.0 s), P2 (D_fin ∈ {0.5, 2.0} s).
+- Question: "At the very end of the video, what is on the square where the first move of the video ended?"
+- Answer: the recapturing piece. Stale: the piece that made move 1.
+- Options: those two plus another piece on the final board, shuffled. 100 per D_fin.
+
+**U-disks (`data_now5/`)**: three colored disks (red, blue, green) in three slots.
+- Layouts L0 (1.0 s), L1, L2 (1.0 s each), L3 (D_fin ∈ {0.5, 2.0} s); consecutive layouts differ.
+- Question: "At the very end, what color is the disk in the position where the <c> disk was at the beginning?"
+- p = the position of c in L0, chosen so that L3[p] ≠ L2[p], L3[p] ≠ c and L2[p] ≠ c. The named color is thus neither the answer nor the stale answer. 100 per D_fin.
+
+### Conditions
+
+- native video;
+- PCD α ∈ {0.5, 1};
+- image-only, with the last frame and the same question. For the disks it is phrased "…where the <c> disk was at the beginning", which is unanswerable from the image.
+
+### Models
+
+Qwen3-VL-8B, Qwen3-VL-32B, Qwen3.5-9B, InternVL3.5-8B, LLaVA-OV-7B.
+
+### Predictions
+
+- **U1**: native P(stale) > 0.25 for at least three of the five models at D_fin = 0.5.
+- **U2**: for those models, PCD α=1 raises accuracy by > 0.15 over native and exceeds image-only by > 0.15.
+
+## Addendum V: detector-free PCD (written before running)
+
+### Motivation
+
+The PCD change detector would fire on every frame of real footage (sensor noise, camera motion).
+
+### Method
+
+**PCD-Δ**: the "past" video is the full video minus its last Δ seconds, with Δ ∈ {0.5, 1.0} s. No change detection is used; α=1.
+
+### Test sets
+
+Chess captures, M (m=4), O (obj n=3, pos n=1) and U-chess.
+
+### Models
+
+Qwen3-VL-8B and InternVL3.5-8B.
+
+### Prediction
+
+- **V1**: PCD-Δ with Δ=1.0 retains ≥ 70% of the detector-PCD gain over native, averaged over the sets.
+- The expected failure mode: when Δ exceeds the final dwell, the past video also contains part of the final state, so the contrast weakens.
+
+## Addendum W: PCD under camera noise with a robust change detector (written before running)
+
+### Noise model
+
+Applied per video (seeded by item index): Gaussian pixel noise σ=6, per-frame random translation of ±2 px, and per-frame brightness flicker of ±3%.
+
+### Detectors
+
+- **pixel**: the current one;
+- **robust**: 4× Gaussian-blurred downsampling, then the consecutive mean absolute difference d_t. A change is d_t > median(d) + 6·MAD(d) + 0.5. t_c is the last change.
+
+### Sets
+
+Chess captures (D_fin 0.5), M (m=4, D_fin 0.5/1.0), U-chess (D_fin 0.5/2.0).
+
+### Models
+
+Qwen3-VL-8B and InternVL3.5-8B.
+
+### Conditions
+
+native (noisy), PCD-pixel, PCD-robust, all with α=1.
+
+### Predictions
+
+- **W1**: PCD-pixel collapses under noise: its gain over native is < 30% of the clean-video PCD gain.
+- **W2**: PCD-robust retains ≥ 70% of the clean PCD gain.
+
+**Addendum W amendment (before any test-set run).** The pre-registered "robust" detector (blur + median/MAD) found no changes on noisy dev videos.
+
+It is replaced by a motion-compensated detector:
+1. Per-frame brightness normalization.
+2. Integer-shift alignment within ±3 px, by minimizing the difference.
+3. Blur, with an 8 px border crop.
+4. A change is flagged when > thr of pixels differ by > 25.
+
+thr = 0.004 was chosen on a dev set disjoint from the W test sets: every 20th item of `data_chess` (non-capture) plus `data_now2` m=2. The detector matches the clean t_c on 36/40 dev videos.

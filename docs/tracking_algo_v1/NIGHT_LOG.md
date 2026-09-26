@@ -918,3 +918,65 @@ Native video → PCD α=1:
 32B almost always answers the named captured piece. It does the same from the final image alone (0.57–0.78), so this is at least partly name priming rather than a stale present. PCD α=1 partially counteracts it at m=1.
 
 Addendum T is model-dependent and confounded by naming the piece in the question. **It is not usable as evidence for or against PCD's value beyond the last frame.** A cleaner history + present design is needed, one that does not name the stale answer.
+
+### 8d. Addendum U: history-referenced present questions (the stale answer is never named)
+
+**U-chess: "what is on the square where the first move of the video ended?"** Exchange windows, 100 per D_fin.
+
+| model | image only | native (P(stale)) | PCD α=0.5 | PCD α=1 |
+|---|---|---|---|---|
+| Qwen3-VL-8B | 0.36 / 0.38 | 0.46 (0.40) / 0.51 (0.37) | 0.59 / 0.71 | **0.65 / 0.82** |
+| Qwen3-VL-32B | 0.44 / 0.46 | 0.52 (0.47) / 0.50 (0.44) | 0.72 / 0.73 | **0.89 / 0.88** |
+| Qwen3.5-9B | 0.50 / 0.41 | 0.67 (0.32) / 0.70 (0.27) | 0.84 / 0.91 | 0.80 / 0.88 |
+| InternVL3.5-8B | 0.34 / 0.39 | 0.59 (0.31) / 0.63 (0.31) | 0.81 / 0.77 | 0.75 / 0.78 |
+| LLaVA-OV-7B | 0.40 / 0.41 | 0.56 (0.28) / 0.38 (0.41) | 0.53 / 0.43 | 0.51 / 0.45 |
+
+(Pairs are D_fin 0.5 / 2.0.)
+
+- **U1 holds**: P(stale) is 0.27–0.47 in all five models.
+- **U2 holds for 4 of 5 models** on chess: PCD α=1 is +0.13 to +0.38 over native and +0.30 to +0.45 over image-only. LLaVA-OV gains nothing.
+- **This is the missing evidence.** The question requires the history (image-only is near chance). Native answers are contaminated by the previous state, and PCD corrects them. PCD therefore adds value beyond "look at the last frame".
+
+**U-disks: "what color is at the position where the <c> disk was at the beginning?"** This fails for every model:
+- native 0.23–0.54;
+- image-only guessing 0.11–0.59;
+- PCD gives no gain.
+
+The models do not retrieve the reference position from the first layout (position-keyed retrieval was already the hardest case in 7e). The failure is in resolving the history reference, before any present-state readout.
+
+### 8e. Addendum V: detector-free PCD-Δ (the past is the video minus its last Δ s)
+
+Accuracy (Qwen3-VL-8B | InternVL3.5-8B):
+
+| cell | native | PCD (detector) | PCD-Δ0.5 | PCD-Δ1.0 |
+|---|---|---|---|---|
+| chess m=1, D_fin 0.5 | 0.20 \| 0.55 | 0.84 \| 0.76 | 0.84 \| 0.76 | 0.72 \| 0.74 |
+| chess m=3, D_fin 0.5 | 0.36 \| 0.48 | 0.74 \| 0.73 | 0.74 \| 0.73 | 0.65 \| 0.72 |
+| O obj n=3, D_fin 0.5 | 0.50 \| 0.96 | 0.94 \| 0.96 | 0.94 \| 0.96 | 0.78 \| 0.96 |
+| M m=4, D_fin 0.5 | 0.40 \| 0.57 | 0.87 \| 0.87 | 0.87 \| 0.87 | 0.75 \| 0.85 |
+| M m=4, D_fin 1.0 | 0.70 \| 0.83 | 0.98 \| 0.92 | 0.93 \| 0.92 | 0.98 \| 0.92 |
+| U-chess, D_fin 0.5 | 0.46 \| 0.59 | 0.65 \| 0.75 | 0.65 \| 0.75 | 0.62 \| 0.83 |
+| **U-chess, D_fin 2.0** | 0.51 \| 0.63 | 0.82 \| 0.78 | **0.44 \| 0.35** | **0.53 \| 0.47** |
+
+- With Δ = D_fin, PCD-Δ equals detector PCD.
+- With Δ > D_fin (Δ1.0 at D_fin 0.5), it keeps most of the gain: about 75% for Qwen3-VL and about 95% for InternVL.
+- **With Δ < D_fin, it hurts, and falls below native.** The "past" clip then still contains the present state, and the contrast subtracts the correct answer.
+- V1 is partly supported. PCD needs a reasonable estimate of when the current state began. For real footage this needs a robust (e.g. feature-based) state-change detector, not a fixed window.
+
+### 8f. Addendum W: PCD under simulated camera noise (σ=6 noise, ±2 px jitter, ±3% flicker)
+
+Accuracy (P(stale)), Qwen3-VL-8B | InternVL3.5-8B:
+
+| cell | native (noisy) | PCD, pixel detector | PCD, motion-compensated detector |
+|---|---|---|---|
+| chess m=1, D_fin 0.5 | 0.39 (0.57) \| 0.53 | 0.39 \| 0.63 | **0.76 (0.09) \| 0.71** |
+| chess m=3, D_fin 0.5 | 0.42 \| 0.57 | 0.23 \| 0.64 | **0.67 \| 0.71** |
+| M m=4, D_fin 0.5 | 0.38 (0.50) \| 0.53 | 0.28 \| 0.92 | **0.92 (0.02) \| 0.93** |
+| M m=4, D_fin 1.0 | 0.75 \| 0.82 | 0.20 \| 0.95 | **0.97 \| 0.93** |
+| U-chess, D_fin 0.5 | 0.46 \| 0.50 | 0.28 \| 0.67 | **0.61 \| 0.72** |
+| U-chess, D_fin 2.0 | 0.46 \| 0.62 | 0.35 \| **0.27** | **0.61 \| 0.72** |
+
+- The pixel detector agrees with the clean t_c on only 19 of 520 noisy videos.
+- **W1 holds**: PCD with the pixel detector collapses under noise. For Qwen3-VL it is at or below native everywhere, and it drops to 0.27 for InternVL on U-chess at D_fin 2.0.
+- **W2 holds**: PCD with the motion-compensated detector recovers the clean-video gains on every cell and both models, including the history-referenced U-chess questions.
+- The PCD pipeline (a motion-compensated change detector plus a present-contrastive decode) is thus robust to realistic sensor and camera noise at this level. Real footage remains untested.

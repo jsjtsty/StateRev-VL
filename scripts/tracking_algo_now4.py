@@ -75,6 +75,37 @@ def generate():
     print(len(items))
 
 
+def generate_ref():
+    """Addendum U disks: query the position where colour c was at the beginning."""
+    D = ROOT / 'outputs/tracking_algo_v1/data_now5'
+    D.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(20261013)
+    LS = layouts(3)
+    items = []
+    for dfin in (0.5, 2.0):
+        j = 0
+        while j < 100:
+            seq = [LS[int(rng.integers(len(LS)))] for _ in range(4)]
+            if any(seq[i] == seq[i + 1] for i in range(3)):
+                continue
+            ok = [(c, seq[0].index(c)) for c in range(3)
+                  if seq[3][seq[0].index(c)] != seq[2][seq[0].index(c)] and c not in (seq[3][seq[0].index(c)], seq[2][seq[0].index(c)])]
+            if not ok:
+                continue
+            c, p = ok[int(rng.integers(len(ok)))]
+            parts = [np.repeat(frame(L)[None], FPS, 0) for L in seq[:3]] + [np.repeat(frame(seq[3])[None], int(round(dfin * FPS)), 0)]
+            fr = np.concatenate(parts)[::2]
+            vid = f'R_f{dfin}_{j:03d}'
+            np.savez_compressed(D / f'{vid}.npz', frames=fr)
+            items.append({'id': vid, 'dfin': dfin, 'ref_color': int(c), 'p': int(p), 'seq': [list(x) for x in seq],
+                          'gt': int(seq[3][p]), 'pen': int(seq[2][p]), 'n_frames': int(len(fr)), 'sample_fps': 4.0})
+            j += 1
+    with open(D / 'items.jsonl', 'w') as f:
+        for r in items:
+            f.write(json.dumps(r) + '\n')
+    print(len(items))
+
+
 def evaluate(model_key, device_map):
     import torch
     from tracking_algo_eval import load, build_inputs, letter_ids
@@ -113,6 +144,9 @@ def evaluate(model_key, device_map):
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(); ap.add_argument('--model'); ap.add_argument('--device-map', default='cuda:0')
+    ap = argparse.ArgumentParser(); ap.add_argument('--model'); ap.add_argument('--device-map', default='cuda:0'); ap.add_argument('--ref', action='store_true')
     a = ap.parse_args()
-    generate() if not a.model else evaluate(a.model, a.device_map)
+    if '--ref' in sys.argv:
+        generate_ref()
+    else:
+        generate() if not a.model else evaluate(a.model, a.device_map)
