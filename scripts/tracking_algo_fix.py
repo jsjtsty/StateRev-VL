@@ -222,7 +222,7 @@ def main():
             fr = np.load(path)['frames'][-1]
             text = proc.apply_chat_template([{'role': 'user', 'content': [{'type': 'image'}, {'type': 'text', 'text': q}]}],
                                             tokenize=False, add_generation_prompt=True, **tkw)
-            inp = {k: (v.to(dev) if hasattr(v, 'to') else v) for k, v in proc(text=[text], images=[fr], return_tensors='pt').items()}
+            inp = {k: (v.to(dev) if hasattr(v, 'to') else v) for k, v in proc(text=[text], images=[fr], return_tensors='pt', **cfg.get('proc_kw', {})).items()}
             with torch.inference_mode():
                 lg = model(**inp, logits_to_keep=1).logits[0, -1].float()
             out.append({'cell': cell, 'gt': it['gt'], 'pen': it['pen'], 'img': int(np.argmax([float(max(lg[i] for i in lid[l])) for l in 'ABC']))})

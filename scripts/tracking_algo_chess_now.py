@@ -186,7 +186,7 @@ def evaluate(model_key, device_map, image_only):
             tkw = {'enable_thinking': False} if cfg['family'] == 'qwen35' else {}
             text = proc.apply_chat_template([{'role': 'user', 'content': [{'type': 'image'}, {'type': 'text', 'text': q}]}],
                                             tokenize=False, add_generation_prompt=True, **tkw)
-            inp = proc(text=[text], images=[frames[-1]], return_tensors='pt')
+            inp = proc(text=[text], images=[frames[-1]], return_tensors='pt', **cfg.get('proc_kw', {}))
         else:
             q = f'The video shows a chess game, one position after another. At the very end of the video, what is on square {it["square"]}? ' + opt
             inp = build_inputs(cfg, proc, frames, q, it['sample_fps'])[0]

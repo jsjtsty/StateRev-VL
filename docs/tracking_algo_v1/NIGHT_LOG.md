@@ -980,3 +980,33 @@ Accuracy (P(stale)), Qwen3-VL-8B | InternVL3.5-8B:
 - **W1 holds**: PCD with the pixel detector collapses under noise. For Qwen3-VL it is at or below native everywhere, and it drops to 0.27 for InternVL on U-chess at D_fin 2.0.
 - **W2 holds**: PCD with the motion-compensated detector recovers the clean-video gains on every cell and both models, including the history-referenced U-chess questions.
 - The PCD pipeline (a motion-compensated change detector plus a present-contrastive decode) is thus robust to realistic sensor and camera noise at this level. Real footage remains untested.
+
+### 8g. Non-Qwen LLM backbones (exploratory, not preregistered; 2026-09-27)
+
+Models: Gemma-3-12B-it, Idefics3-8B-Llama3, InternVL3.5-GPT-OSS-20B-A4B-Preview. Frames are given as a numbered image list (≤32 frames, last frame kept). Queue: `scripts/run_tracking_algo_queue_nonqwen.sh`. Logs: `logs/{anchor_imgonly,chesscap_*_img,fix_pcd,fixU,fixU_img}_<model>.log`.
+
+Each cell is image-only → native (P(stale)) → PCD α=1.
+
+**Gemma-3-12B**
+- chess m=1, D 0.5: 0.95 → 0.61 (0.37) → 0.93
+- M m=4, D 0.5: 1.00 → 0.30 → 0.73
+- O obj n=3, D 0.5: 1.00 → 0.58 → 0.82
+- U-chess: 0.39/0.45 → 0.45/0.45 → 0.74/0.64
+
+**Idefics3-8B**
+- The chess board is not perceived (image-only 0.43–0.52), so the chess cells are uninformative.
+- M: 1.00 → 0.37 → 0.75
+- O obj n=3: 0.86 → 0.36 → 0.92
+- **PCD hurts the N_ball control: 0.44 → 0.04.**
+
+**InternVL-GPT-OSS**
+- Near-immune on the synthetic cells: M 0.97, O obj 0.90–1.00.
+- One exception: O pos n=1, D 0.5 drops to 0.48 (image-only 1.00, PCD 1.00).
+- Strong stale present on chess: 0.70–0.85 → 0.39–0.56 (0.43–0.57) → 0.68–0.79.
+- U-chess: 0.31/0.40 → 0.49/0.48 → 0.67/0.58.
+
+**U-disks** fails for all three models (as with Qwen).
+
+**Takeaways**
+- The stale present is not specific to Qwen LLMs, nor to Qwen's 2-frame temporal token merging.
+- PCD transfers to the non-Qwen models, but with a control failure on Idefics3.

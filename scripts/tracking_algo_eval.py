@@ -29,6 +29,9 @@ MODEL_CFG = {
     'llava_video7b': dict(path='LLaVA-NeXT-Video-7B-hf', family='llava', max_frames=16),
     'llava_ov7b': dict(path='llava-onevision-qwen2-7b-ov-hf', family='llava', max_frames=32),
     'internvl35_8b': dict(path='InternVL3_5-8B-HF', family='llava', max_frames=32, square=448),
+    'gemma3_12b': dict(path='gemma-3-12b-it', family='multiimg', max_frames=32),
+    'idefics3_8b': dict(path='Idefics3-8B-Llama3', family='multiimg', max_frames=32, proc_kw=dict(do_image_splitting=False)),
+    'internvl_gptoss': dict(path='InternVL3_5-GPT-OSS-20B-A4B-Preview', family='multiimg', max_frames=32, remote=True),
     'qwen35_9b': dict(path='Qwen3.5-9B', family='qwen35'),
     'qwen36_27b': dict(path='Qwen3.6-27B', family='qwen35'),
     'qwen36_35b_a3b': dict(path='Qwen3.6-35B-A3B', family='qwen35'),
@@ -64,9 +67,78 @@ def question(item, variant):
     return q, letters
 
 
+class InternVLChatProc:
+    """Processor shim for remote-code InternVLChatModel: one 448x448 tile (256 tokens) per image, as InternVL does for
+    video frames; prompt in the model's own conversation template, answer channel opened (GPT-OSS harmony format)."""
+    MEAN, STD = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
+
+    def __init__(self, tok, system, n_tok):
+        self.tokenizer, self.system, self.n_tok = tok, system, n_tok
+
+    def apply_chat_template(self, msgs, tokenize=False, add_generation_prompt=True, **kw):
+        body = ''.join(c['text'] + ' ' if c['type'] == 'text' else '<image>\n' for c in msgs[0]['content']).strip()
+        return (f'<|start|>system<|message|>{self.system}<|end|><|start|>user<|message|>{body}<|end|>'
+                '<|start|>assistant<|channel|>final<|message|>')
+
+    def __call__(self, text, images, return_tensors='pt', **kw):
+        import cv2
+        imgs = images[0] if isinstance(images[0], (list, tuple)) else images
+        px = np.stack([(cv2.resize(np.asarray(im)[..., :3], (448, 448), interpolation=cv2.INTER_CUBIC) / 255. - self.MEAN) / self.STD
+                       for im in imgs]).transpose(0, 3, 1, 2)
+        t = text[0]
+        assert t.count('<image>') == len(imgs)
+        t = t.replace('<image>', '<img>' + '<IMG_CONTEXT>' * self.n_tok + '</img>')
+        enc = self.tokenizer([t], return_tensors='pt')
+        return dict(input_ids=enc['input_ids'], attention_mask=enc['attention_mask'],
+                    pixel_values=torch.tensor(px, dtype=torch.bfloat16), image_flags=torch.ones(len(imgs), 1, dtype=torch.long))
+
+
+def load_remote(cfg, device_map):
+    from transformers import AutoTokenizer
+    try:
+        import timm  # noqa: F401
+    except ImportError:                            # remote code only needs timm's DropPath (identity at inference)
+        import types
+        m = types.ModuleType('timm.layers'); m.DropPath = lambda *a, **k: torch.nn.Identity()
+        sys.modules['timm'], sys.modules['timm.layers'] = types.ModuleType('timm'), m
+    path = MODELS / cfg['path']
+    tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+    from transformers.dynamic_module_utils import get_class_from_dynamic_module
+    cls = get_class_from_dynamic_module('modeling_internvl_chat.InternVLChatModel', str(path))
+    if not getattr(cls, '_post_init_patched', False):   # written for transformers 4.x: __init__ never calls post_init()
+        init0 = cls.__init__
+
+        def init(self, *a, **k):
+            init0(self, *a, **k)
+            self.post_init()
+        cls.__init__, cls._post_init_patched = init, True
+    if device_map == 'auto' and torch.cuda.device_count() > 1:   # ViT, projector and embeddings must share a device
+        n = torch.cuda.device_count(); split = [int(24 * (i + 1) / (n + 0.6)) for i in range(n)]
+        device_map = {'vision_model': 0, 'mlp1': 0, 'language_model.model.embed_tokens': 0,
+                      'language_model.model.norm': n - 1, 'language_model.lm_head': n - 1,
+                      'language_model.model.rotary_emb': 0}
+        for l in range(24):
+            device_map[f'language_model.model.layers.{l}'] = min(sum(l >= b for b in split), n - 1)
+    model = cls.from_pretrained(path, dtype=torch.bfloat16, device_map=device_map).eval()
+    model.language_model.set_attn_implementation('flex_attention')   # eager (default, no SDPA for sinks) OOMs at ~8k tokens
+    model.img_context_token_id = tok.convert_tokens_to_ids('<IMG_CONTEXT>')
+    outer, lm_fwd, keep = model.forward, model.language_model.forward, {}
+
+    def lm_forward(*a, **k):                      # the wrapper does not take logits_to_keep; pass it to the LM
+        return lm_fwd(*a, logits_to_keep=keep.get('n', 0), **k)
+
+    def forward(*a, logits_to_keep=0, **k):
+        keep['n'] = logits_to_keep
+        return outer(*a, **k)
+    model.language_model.forward, model.forward = lm_forward, forward
+    return cfg, InternVLChatProc(tok, model.system_message, model.num_image_token), model
+
+
 def load(model_key, device_map):
     from transformers import AutoProcessor, AutoModelForImageTextToText
     cfg = MODEL_CFG[model_key]
+    if cfg.get('remote'):
+        return load_remote(cfg, device_map)
     path = MODELS / cfg['path']
     proc = AutoProcessor.from_pretrained(path)
     if cfg.get('square'):          # InternVL: the video processor defaults to 384, the model expects 448
@@ -79,12 +151,19 @@ def load(model_key, device_map):
 def build_inputs(cfg, proc, frames, text_q, fps, think=False):
     from transformers.video_utils import VideoMetadata
     fam = cfg['family']
-    if fam == 'llava' and len(frames) > cfg['max_frames']:
+    if fam in ('llava', 'multiimg') and len(frames) > cfg['max_frames']:
         idx = np.round(np.linspace(0, len(frames) - 1, cfg['max_frames'])).astype(int)
         frames = frames[idx]
     if cfg.get('square'):
         import cv2
         frames = np.stack([cv2.resize(f, (cfg['square'], cfg['square'])) for f in frames])
+    if fam == 'multiimg':         # no video input: frames as a list of timestamped images (as in now2 --mode images)
+        content = []
+        for i in range(len(frames)):
+            content += [{'type': 'text', 'text': f'Frame {i + 1}:'}, {'type': 'image'}]
+        content.append({'type': 'text', 'text': text_q})
+        text = proc.apply_chat_template([{'role': 'user', 'content': content}], tokenize=False, add_generation_prompt=True)
+        return proc(text=[text], images=[list(frames)], return_tensors='pt', **cfg.get('proc_kw', {})), text
     msgs = [{'role': 'user', 'content': [{'type': 'video'}, {'type': 'text', 'text': text_q}]}]
     tkw = {}
     if fam == 'qwen35':

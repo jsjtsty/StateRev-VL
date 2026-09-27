@@ -25,7 +25,7 @@ def anchored_inputs(cfg, proc, frames, q, fps, anchor=True, image_only=False):
         q = q.replace('At the very end of the video, ', '').replace('The video shows', 'The image shows').replace('are rearranged several times', 'are arranged')
         text = proc.apply_chat_template([{'role': 'user', 'content': [{'type': 'image'}, {'type': 'text', 'text': q}]}],
                                         tokenize=False, add_generation_prompt=True, **tkw)
-        return proc(text=[text], images=[frames[-1]], return_tensors='pt')
+        return proc(text=[text], images=[frames[-1]], return_tensors='pt', **cfg.get('proc_kw', {}))
     content = [{'type': 'video'}]
     if anchor:
         content += [{'type': 'image'}, {'type': 'text', 'text': 'The last frame of the video is shown above. '}]
