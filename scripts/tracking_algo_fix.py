@@ -195,7 +195,8 @@ def patch_eager():
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--model', required=True); ap.add_argument('--device-map', default='cuda:0')
-    ap.add_argument('--cpm', action='store_true'); ap.add_argument('--only', default=''); ap.add_argument('--image-only', action='store_true'); ap.add_argument('--delta', action='store_true'); a = ap.parse_args()
+    ap.add_argument('--cpm', action='store_true'); ap.add_argument('--only', default=''); ap.add_argument('--image-only', action='store_true'); ap.add_argument('--delta', action='store_true')
+    ap.add_argument('--dump', action='store_true', help='Addendum X: save lp_full, lp_past, lp_pres per item'); a = ap.parse_args()
     cfg = MODEL_CFG[a.model]
     if a.cpm:
         patch_eager()
@@ -225,10 +226,11 @@ def main():
             inp = {k: (v.to(dev) if hasattr(v, 'to') else v) for k, v in proc(text=[text], images=[fr], return_tensors='pt', **cfg.get('proc_kw', {})).items()}
             with torch.inference_mode():
                 lg = model(**inp, logits_to_keep=1).logits[0, -1].float()
-            out.append({'cell': cell, 'gt': it['gt'], 'pen': it['pen'], 'img': int(np.argmax([float(max(lg[i] for i in lid[l])) for l in 'ABC']))})
+            out.append({'id': it['id'], 'cell': cell, 'gt': it['gt'], 'pen': it['pen'], 'img': int(np.argmax([float(max(lg[i] for i in lid[l])) for l in 'ABC']))})
         for cell in dict.fromkeys(r['cell'] for r in out):
             r = [x for x in out if x['cell'] == cell]
             print(a.model, 'image-only', cell, round(np.mean([x['img'] == x['gt'] for x in r]), 3), round(np.mean([x['img'] == x['pen'] for x in r]), 3), flush=True)
+        (B / f'fix_img_{a.model}_{a.only or "H"}.jsonl').write_text('\n'.join(json.dumps(r) for r in out))
         return
     out = []
     for it, path, q, vals, cell in all_tasks(a.only if a.only in ('K', 'H', 'U', 'V', 'W') else ''):
@@ -239,7 +241,7 @@ def main():
             frames = add_noise(frames, abs(hash(it['id'])) % (2 ** 31))
         letters = 'ABCD'[:len(vals)]; lid = letter_ids(proc.tokenizer, letters)
         tc = last_change(frames)
-        tc_r = last_change_robust(frames)
+        tc_r = last_change_robust(frames) if a.only == 'W' else None
         rec = {'id': it['id'], 'cell': cell, 'gt': it['gt'], 'pen': it.get('pen'), 'tc': tc}
         with torch.inference_mode():
             inp, f = scores(frames, q, letters, lid)
@@ -263,6 +265,10 @@ def main():
                     past = np.zeros_like(full)
                 for al in (0.5, 1.0):
                     rec[f'pcd{al}'] = vals[int((full - al * past).argmax())]
+                if a.dump:
+                    pres_fr = frames[tc:] if len(frames) - tc >= 2 else np.concatenate([frames[-1:]] * 2)
+                    rec.update(vals=list(vals), lp_full=full.tolist(), lp_past=past.tolist(),
+                               lp_pres=scores(pres_fr, q, letters, lid)[1]().tolist())
                 if a.only == 'W':
                     past_r = scores(frames[:tc_r], q, letters, lid)[1]() if tc_r >= 2 else np.zeros_like(full)
                     rec['pcd_robust'] = vals[int((full - past_r).argmax())]
@@ -273,7 +279,7 @@ def main():
                         _, fd = scores(frames[:max(cut, 2)], q, letters, lid)
                         rec[f'pcdD{dl}'] = vals[int((full - fd()).argmax())]
         out.append(rec)
-    tag = 'cpm' if a.cpm else ('pcdD' if a.delta else ('pcdW' if a.only == 'W' else 'pcd'))
+    tag = 'cpm' if a.cpm else ('pcdD' if a.delta else ('pcdW' if a.only == 'W' else ('dump' if a.dump else 'pcd')))
     (B / f'fix_{tag}_{a.model}{"_" + a.only if a.only else ""}.jsonl').write_text('\n'.join(json.dumps(r) for r in out))
     keys = ['native'] + (['cpm', 'cpm_ends'] if a.cpm else ['pcd0.5', 'pcd1.0'] + (['pcdD0.5', 'pcdD1.0'] if a.delta else []) + (['pcd_robust'] if a.only == 'W' else []))
     for cell in dict.fromkeys(r['cell'] for r in out):

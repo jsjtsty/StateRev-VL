@@ -1010,3 +1010,80 @@ Each cell is image-only → native (P(stale)) → PCD α=1.
 **Takeaways**
 - The stale present is not specific to Qwen LLMs, nor to Qwen's 2-frame temporal token merging.
 - PCD transfers to the non-Qwen models, but with a control failure on Idefics3.
+
+### 8h. Stats, Addendum Y (layer masking) and Addendum Z (real footage) (2026-09-28)
+
+**Stats.** Bootstrap CIs and McNemar/Holm for every §5–§6 cell are in `stats_ci.md` (`scripts/tracking_algo_stats.py`).
+
+**Idefics3 N_ball.** The PCD failure is a degenerate control: the model answers C on 100% of items under every input. PCD amplifies ~0.1-nat noise.
+
+**Y (`tracking_algo_layermask.py`; n=320: M m4 f0.5/f1.0 + chess m1/m3 f0.5).** Masking text→image attention to the penultimate state.
+
+Gemma-3-12B:
+- no mask 0.547 → all layers 0.709 (McNemar 54:2): **Y1 holds**.
+- L18–23 alone 0.678 (81% of the gain): **Y2 holds**. Relative depth 0.38–0.48, vs Qwen 0.50–0.72.
+- 8 global layers alone 0.700; 40 sliding-window layers alone 0.603.
+- Masking the final state: 0.138. Masking an earlier state: −0.03. **Y3 holds.**
+
+Idefics3-8B:
+- all layers 0.45 → 0.50 (29:13, p=0.02): Y1 fails.
+- Hypothesis: the stale state enters at the encoding stage.
+
+**Z (`tracking_algo_real.py`; Perception Test videos in MVBench perception.zip; 79 letter-order + 23 bag items; 2 fps, 448 px).**
+
+Letters, image-only − native, with 95% CI:
+
+| Model | Difference |
+|---|---|
+| Qwen3-VL-8B | +0.03 |
+| Qwen3-VL-32B | −0.05 |
+| Qwen3.5-9B | 0.00 |
+| InternVL3.5-8B | +0.06 |
+| LLaVA-OV-7B | **+0.14 [0.03, 0.25]** |
+| Gemma-3-12B | +0.06 |
+| Pooled | **+0.04 [−0.00, 0.08]** |
+
+- Z0 holds (image-only 0.63–0.73). **Z1 fails.**
+- Z2: the stale option takes 0.69 of native errors (p=6e-4), but also 0.61 of image-only errors, so it is a confusable distractor. Not diagnostic.
+- Bag: native is far better than image-only (not single-frame decidable).
+- PCD fails on real footage: the robust detector puts t_c at the median 98% of the video, because hands and camera move.
+- Per the prereg, the remaining 142 videos are not fetched.
+
+**Scheduling.** GPUs 0/1 idled after the Y runs. The queue tails were replaced by `run_tracking_algo_queue_rest2.sh`; the running dumps were untouched. The X dumps (gemma3_12b, internvl35_8b, llava_ov7b, internvl_gptoss) are still running. Addendum X is written up after they finish.
+
+### 8i. Real-footage follow-ups AA–AF (2026-09-28)
+
+- **AA** (last change → 0.5 s / 2 s / full, crop view, 6 models): pooled image-only − native +0.011 [−0.030, +0.051]; AA2 +0.006. Fails. Dwell length was not why Z failed. Summary: `real2_summary.md`.
+- **AB/AC** (real vs synthetic tiles, natural/splice/static timelines): on synthetic tiles the position question shows gaps of +0.13 to +0.49 on the 7–12B models; 32B is at ceiling. Real-frame gaps are small and mixed. Real shuffles are multi-step: of 74 reconstructable items, 8 have 1 change, 24 have 2 and 42 have 3–13. The Z "stale option" (the beginning order) is the true penultimate state in only 10 of 73 items.
+- **AD** (synthetic tiles, m×fps×dur, 5 models, n=67; 32B not run): main effects on the gap:
+  - m 1→4: +0.24 (pos and order);
+  - dur 1→4 s: +0.07;
+  - fps: ≈0.
+  - P(stale) follows the same pattern. `synthword2_summary.md`.
+- **AE** (question targets the reconstructed penultimate state, 6 models):
+  - pos D=0.5: +0.123 [+0.076, +0.169];
+  - penultimate share of errors: −0.024 (ns).
+  - Exploratory: ≤2 changes +0.22; held ≥2 s +0.17.
+  - `real4_summary.md`.
+- **AF** (frozen = last frame repeated through the video path; preregistered before running):
+  - history effect (frozen − native), pos D=0.5: +0.097 [+0.051, +0.144]. Just under the 0.10 threshold, so AF1 formally fails.
+  - pipeline effect: +0.025 (ns). AF2: −0.066 (ns).
+  - P(pen) rises frozen → native only for InternVL3.5 (0.18 → 0.31) and LLaVA-OV (0.21 → 0.31), and weakly for 32B (0.21 → 0.26).
+  - `real5_summary.md`.
+- **Ops:** the first 32B AB/AC launches OOMed next to AF on GPU0 (their DONE lines in ab_done/ac_done are false; a note was appended). The abc and ae queues were killed, and all 32B runs were redone with `run_tracking_algo_queue_32b.sh` on GPUs 1,2 (q32b_done.txt).
+- **AG** (rev. 1, recorded before running). Checking the stimuli showed that most AE intermediate "states" are transit orders (hands carrying letters). With resting states (letter centroids still across adjacent 1-fps samples), 45/73 items have exactly one resting prior state, 7 have two and 22 have none. AG therefore uses m=1: the prior resting state held 4 s, then the final state 0.5 s, at 2 fps; real frames vs rendered tiles; held vs frozen vs image-only; 52 items.
+  - Position questions:
+    - real: frozen − held +0.096 [+0.048, +0.144] (AG1 formally just misses 0.10); P(stale) held − frozen +0.103 [+0.054, +0.151] (AG2 holds).
+    - syn: +0.131 and +0.106.
+    - domain difference: +0.035 (ns).
+  - Order questions: ≈0 in both domains.
+  - `real6_summary.md`.
+
+### 8k. Addendum AH: layer masking on the AG real clips (2026-09-28)
+- Prereg in PREREG.md (AH) before running. `scripts/tracking_algo_real7.py`, `run_tracking_algo_queue_ah.sh`, stats `tracking_algo_real7_stats.py` → `real7_summary.md`.
+- Sanity: `none` answers agree 100% with AG held answers (all 3 models, both domains).
+- Real, position, P(stale) none → prior_all: Qwen3-VL-8B 0.404 → 0.250 (9:1, p=0.02; AH1 holds), LLaVA-OV 0.423 → 0.212 (12:1, p=0.003), Gemma 0.346 → 0.250 (6:1, p=0.13).
+- Qwen bands: L9–17 −0.115, L18–26 −0.096 (62% of prior_all; AH2 ≥50% met but not the best band → AH2 fails), L0–8/L27–35 0.
+- LLaVA-OV: L14–20 alone −0.19 (11:1); other bands small. Syn domain same band (0.48 → 0.21).
+- Gemma: prior_global 0.346 → 0.231 (6:0, p=0.03); L12–17 best band.
+- fin_all collapses toward stale in all models (AH3 holds).

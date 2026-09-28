@@ -1,0 +1,120 @@
+"""Bootstrap CIs and paired tests for the stale-present / PCD tables (CPU only, reads saved per-item outputs).
+
+Per model and cell:
+  - accuracy with a 95% percentile-bootstrap CI for image-only, native video, and PCD α=1;
+  - paired differences (native − image-only, PCD − native, PCD − image-only), each with a bootstrap CI
+    and an exact McNemar p-value; the p-values are Holm-adjusted within each comparison type.
+The U-chess image-only results were only logged as aggregates, so comparisons against them are unpaired:
+a two-sample bootstrap CI and a two-sided Fisher exact test.
+Output: outputs/tracking_algo_v1/stats_ci.{json,md}
+"""
+import json, re
+from pathlib import Path
+import numpy as np
+from scipy.stats import binomtest, fisher_exact
+
+ROOT = Path(__file__).resolve().parents[1]
+B = ROOT / 'outputs/tracking_algo_v1'
+NB = 10000
+rng = np.random.default_rng(20260928)
+MODELS = ['qwen3vl8b', 'qwen3vl32b', 'qwen35_9b', 'internvl35_8b', 'llava_ov7b', 'gemma3_12b', 'idefics3_8b', 'internvl_gptoss']
+
+
+def load(p):
+    return [json.loads(l) for l in open(p)] if p.exists() else []
+
+
+def ci(x):
+    x = np.asarray(x, float)
+    bs = x[rng.integers(0, len(x), (NB, len(x)))].mean(1)
+    return float(x.mean()), float(np.quantile(bs, .025)), float(np.quantile(bs, .975))
+
+
+def diff_unpaired(a, b):  # mean(a) - mean(b), independent samples
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    bs = a[rng.integers(0, len(a), (NB, len(a)))].mean(1) - b[rng.integers(0, len(b), (NB, len(b)))].mean(1)
+    p = fisher_exact([[a.sum(), len(a) - a.sum()], [b.sum(), len(b) - b.sum()]])[1]
+    return float(a.mean() - b.mean()), float(np.quantile(bs, .025)), float(np.quantile(bs, .975)), float(p)
+
+
+def mcnemar(a, b):  # exact, two-sided, on discordant pairs
+    a, b = np.asarray(a, bool), np.asarray(b, bool)
+    n01, n10 = int((~a & b).sum()), int((a & ~b).sum())
+    return 1.0 if n01 + n10 == 0 else float(binomtest(n10, n01 + n10, .5).pvalue)
+
+
+def diff_paired(a, b):  # mean(a) - mean(b) over the same items
+    d = np.asarray(a, float) - np.asarray(b, float)
+    m, lo, hi = ci(d)
+    return m, lo, hi, mcnemar(a, b)
+
+
+def image_only(model):
+    """id -> correct (bool) for chess captures, O and M; cell -> (acc, n) aggregates for U (from logs)."""
+    by_id = {}
+    for r in load(B / f'chess_now_{model}_imgonly_cap.jsonl'):
+        by_id[r['id']] = r['pred'] == r['gt']
+    for s in 'OM':
+        for r in load(B / f'anchor_imgonly_{s}_{model}.jsonl'):
+            by_id[r['id']] = r['pred'] == r['gt']
+    agg = {}
+    lg = B / f'logs/fixU_img_{model}.log'
+    if lg.exists():
+        for m in re.finditer(r'image-only (U_\S+) ([\d.]+) ([\d.]+)', lg.read_text()):
+            agg[m.group(1)] = float(m.group(2))
+    return by_id, agg
+
+
+def holm(ps):
+    order = np.argsort(ps); out = np.empty(len(ps)); run = 0.
+    for k, i in enumerate(order):
+        run = max(run, min(1., (len(ps) - k) * ps[i])); out[i] = run
+    return out
+
+
+def main():
+    rows = []
+    for model in MODELS:
+        recs = load(B / f'fix_pcd_{model}.jsonl') + load(B / f'fix_pcd_{model}_U.jsonl')
+        if not recs:
+            continue
+        img_id, img_agg = image_only(model)
+        for cell in dict.fromkeys(r['cell'] for r in recs):
+            R = [r for r in recs if r['cell'] == cell]
+            nat = [r['native'] == r['gt'] for r in R]
+            pcd = [r['pcd1.0'] == r['gt'] for r in R]
+            row = dict(model=model, cell=cell, n=len(R), native=ci(nat), pcd=ci(pcd),
+                       stale_native=float(np.mean([r['native'] == r['pen'] for r in R])),
+                       stale_pcd=float(np.mean([r['pcd1.0'] == r['pen'] for r in R])),
+                       pcd_minus_native=diff_paired(pcd, nat))
+            if all(r['id'] in img_id for r in R):
+                img = [img_id[r['id']] for r in R]
+                row.update(img=ci(img), paired_img=True,
+                           native_minus_img=diff_paired(nat, img), pcd_minus_img=diff_paired(pcd, img))
+            elif cell in img_agg:  # reconstruct an unpaired 0/1 vector with the logged accuracy
+                k = int(round(img_agg[cell] * len(R)))
+                img = [1] * k + [0] * (len(R) - k)
+                row.update(img=ci(img), paired_img=False,
+                           native_minus_img=diff_unpaired(nat, img), pcd_minus_img=diff_unpaired(pcd, img))
+            rows.append(row)
+    for key in ('pcd_minus_native', 'native_minus_img', 'pcd_minus_img'):
+        idx = [i for i, r in enumerate(rows) if key in r]
+        for i, p in zip(idx, holm(np.array([rows[i][key][3] for i in idx]))):
+            rows[i][key + '_holm'] = float(p)
+    (B / 'stats_ci.json').write_text(json.dumps(rows, indent=1))
+
+    f = lambda t: f'{t[0]:.2f} [{t[1]:.2f}, {t[2]:.2f}]'
+    g = lambda r, k: (f'{r[k][0]:+.2f} [{r[k][1]:+.2f}, {r[k][2]:+.2f}] p={r[k + "_holm"]:.1g}' if k in r else '—')
+    L = ['# Bootstrap 95% CIs and paired tests (generated by scripts/tracking_algo_stats.py)', '',
+         f'{NB} bootstrap resamples. p = exact McNemar (Fisher for unpaired, marked *), Holm-adjusted within each difference column.', '',
+         '| model | cell | n | image-only | native | PCD α=1 | native − img | PCD − native | PCD − img |', '|' + '---|' * 9]
+    for r in rows:
+        star = '' if r.get('paired_img', True) else '*'
+        L.append(f"| {r['model']} | {r['cell']} | {r['n']} | {f(r['img']) + star if 'img' in r else '—'} | {f(r['native'])} | {f(r['pcd'])} | "
+                 f"{g(r, 'native_minus_img')} | {g(r, 'pcd_minus_native')} | {g(r, 'pcd_minus_img')} |")
+    (B / 'stats_ci.md').write_text('\n'.join(L) + '\n')
+    print('\n'.join(L))
+
+
+if __name__ == '__main__':
+    main()

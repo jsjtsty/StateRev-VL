@@ -676,3 +676,403 @@ It is replaced by a motion-compensated detector:
 4. A change is flagged when > thr of pixels differ by > 25.
 
 thr = 0.004 was chosen on a dev set disjoint from the W test sets: every 20th item of `data_chess` (non-capture) plus `data_now2` m=2. The detector matches the clean t_c on 36/40 dev videos.
+
+## Addendum X: a stale-signature gate for PCD (written 2026-09-28, before dumping any logits)
+
+### Motivation
+
+PCD hurt some controls. On Idefics3-8B, α=1 dropped N_ball from 0.44 to 0.04; on InternVL3.5-8B it dropped U-disks. PCD should only act when the full-video answer looks like an echo of the past.
+
+### Data
+
+Same items as `fix.py` default plus `--only U`.
+
+Per item we save three 3-way log-softmax vectors over the option letters:
+- lp_full: the full video;
+- lp_past: video[:t_c] (zeros if t_c < 2);
+- lp_pres: video[t_c:], i.e. the final state only (repeated to ≥ 2 frames).
+
+t_c is the pixel detector from Addendum S.
+
+### Rules
+
+- **native**: argmax lp_full.
+- **PCD**: argmax(lp_full − lp_past).
+- **G_agree (primary)**: PCD if argmax lp_past == argmax lp_full, else native. When the past clip already predicts the full-video answer, that answer is suspected to be the stale state.
+- **present-clip baseline**: argmax lp_pres. This is analogous to image-only, but as a video segment.
+
+### Models
+
+Qwen3-VL-8B, Qwen3.5-9B, InternVL3.5-8B, LLaVA-OV-7B, Gemma-3-12B and Idefics3-8B. InternVL-GPT-OSS is added if GPUs allow.
+
+### Predictions
+
+- **X1 (safety)**: on N_digit and N_ball, G_agree is within 0.05 of native for every model.
+- **X2 (retention)**: over the stale cells (chess captures, M, O, U-chess), G_agree keeps ≥ 80% of PCD's mean accuracy gain over native, per model, for every model where PCD's gain is > 0.05.
+- **X3**: on U-chess, G_agree > present-clip, with a paired McNemar test at p < 0.05 after pooling D_fin, for ≥ 4 of 6 models.
+
+### Analysis
+
+Paired bootstrap CIs (`tracking_algo_stats.py` conventions).
+
+## Addendum Y: layer-resolved stale retrieval in non-Qwen LLMs (written 2026-09-28, before running)
+
+### Motivation
+
+C7 (text→video retrieval of the stale state at L18–26) rests on Qwen3-VL-8B alone.
+
+### Models
+
+Gemma-3-12B (48 layers, 5 sliding-window layers of 1024 tokens per global layer) and Idefics3-8B (32 layers). Both take frames as an image list.
+
+### Intervention
+
+Tokens after the last image token (the question and the generation prompt) are blocked from attending to the image tokens of a chosen state's frames, in chosen layers. This is done via an SDPA wrapper that edits the boolean mask.
+
+States come from the pixel change detector:
+- **pen**: the penultimate state, frames [t_p, t_c);
+- **fin**: the final state;
+- **early**: the state before pen, if one exists.
+
+### Conditions
+
+- none;
+- pen in all layers;
+- pen in each of 8 equal contiguous layer bands;
+- Gemma only: pen in global layers only, and in sliding layers only;
+- fin in all layers;
+- early in all layers.
+
+### Data
+
+M (m=4, D_fin 0.5 and 1.0; n=120) and chess captures (m=1 and 3, D_fin 0.5; n=200).
+
+### Predictions
+
+- **Y1**: masking pen in all layers raises pooled accuracy by ≥ 0.15 and lowers P(stale).
+- **Y2**: one band, or two adjacent bands (≤ 1/4 of depth), gives ≥ 70% of the all-layer gain. We report the relative depth of the band and compare it with Qwen3-VL-8B's 18–26 of 36 (0.50–0.72).
+- **Y3 (controls)**:
+  - masking early changes accuracy by < 0.05;
+  - masking fin lowers accuracy.
+
+**Addendum X amendment (2026-09-28, after a smoke run on N_digit/N_ball for Idefics3 only, before any full dump)**
+
+**Smoke-run finding.** On N_ball, Idefics3 answers "C" on 100% of items under every input: full video, past clip and present clip. Native 0.44 is simply the base rate of "C". lp_full and lp_past differ by only ~0.1–0.2 nats, so PCD amplifies numerical noise (0.04). G_agree cannot catch this, because past and full agree.
+
+**Added rule (secondary; δ fixed now, not tuned):**
+- **G_margin**: apply G_agree, and additionally require that the PCD winner leads the PCD runner-up by ≥ δ = 1.0 nat on lp_full − lp_past. Otherwise use native.
+- δ = 0.5 is reported as a sensitivity check.
+
+**Scope.** The Idefics3 N cells were seen before this rule was written. X1 for Idefics3 is therefore reported, but flagged as non-confirmatory.
+
+## Addendum Z: stale present on real footage (pilot; written 2026-09-28, before any model is run on these videos)
+
+### Data
+
+Perception Test valid-split videos that ship in MVBench `video/perception.zip` (792 videos). From the official `mc_question_valid.json`, we keep every end-state question whose answer should be visible in the last frame:
+- **letters** (n=79): "What is the order of the letters (on the table) at the end?". A person rearranges letter cards on a table.
+- **bag** (n=23): "Is the bag empty at the end?".
+
+The cup/occlusion-game questions (n=200) are excluded: the answer is hidden in the final frame, and the shell game is covered in §2.
+
+**Stale option.** For a letters item, the stale option is the answer to the same video's "What was the order of the letters at the beginning?", when that order is one of the options and is not the correct one. Note that this is the initial state, which is not necessarily the penultimate one.
+
+**Video processing.** Decoded at 2 fps, always keeping the last frame, and resized to 448 px wide.
+
+### Conditions
+
+- **native**: the full video with the original question.
+- **image-only**: the last frame alone. The question has "at the end" removed and is prefixed with "The image shows the last frame of a video."
+- **PCD α=1 (exploratory)**: uses the motion-compensated detector (Addendum W). On real footage, t_c marks the last visible motion, e.g. the hand leaving, which is not necessarily the last state change.
+
+### Models
+
+Qwen3-VL-8B, Qwen3.5-9B, InternVL3.5-8B, LLaVA-OV-7B and Gemma-3-12B. Qwen3-VL-32B is added if time allows.
+
+### Predictions (pilot; both outcomes will be reported)
+
+- **Z1**: pooled over models, on letters, image-only − native ≥ 0.10. The paired bootstrap CI is computed per model.
+- **Z2**: among native errors on letters items that have a stale option, the stale option is chosen more often than the other distractor. This uses a binomial test per model, and pooled.
+- **Z0 (validity gate)**: a model enters Z1/Z2 only if its image-only letters accuracy is ≥ 0.5 (chance 0.33). Otherwise it cannot read the final frame.
+
+### Interpretation
+
+- **Z1 fails**: we report that the stale present did not appear on these real videos at this sample size.
+- **Z1 holds**: we fetch the remaining 142 end-state videos of the valid split, via ranged download of only those zip members, and re-run with the same rules.
+
+## Addendum AA: real footage with a controlled final dwell (registered 2026-09-28, before any model is run on these clips)
+
+**Why (post hoc, stated as such).** Addendum Z failed: pooled image-only − native was +0.04. Inspection afterwards showed that the pilot tested the wrong condition.
+- In the official annotations, the letters settle a median of **12.2 s** before the video ends, and the person then does something else (e.g. makes tea). In the synthetic studies (§5.2), the effect shrinks sharply by a 2 s final dwell.
+- At 448 px wide, the letter tiles cover a few dozen pixels, so reading, not recency, limited accuracy (image-only ≈ 0.67).
+- The PCD change detector fired on unrelated motion (e.g. the tea-making).
+
+Addendum AA therefore controls the final dwell and the readability, both from the official annotations. The Z items, the stale-option labels and the prompts are unchanged.
+
+**Data.** The 79 letters items of Addendum Z. From `dataset/valid_annotations.zip` (`all_valid.json`):
+- **letter objects**: the answers of the grounded question "Track the letters that the person interacts with."
+- **settle frame T**: the last end frame of any `action_localisation` segment whose parent objects include a letter.
+  - Fallback, when there is no such segment: the last annotated box frame (1 fps) at which a letter's box centre is > 2% of the frame width away from its final position.
+- **last-change start S**: the start frame of the letter segment that ends last. This is used only by the exploratory oracle PCD.
+- **crop**: the union of all letter boxes over the video, padded by 50% of its size on each side, cut from the 1920×1080 source, and resized to 448 px wide.
+
+**Clips.**
+- Frames are sampled every 0.5 s from the video start. The clip's end frame is always appended.
+- **D=0.5** and **D=2**: the clip ends at min(T + D·30, last frame).
+- **D=full**: the clip ends at the original end.
+- Views: **crop** (primary) and **wide** (the full frame at 448 px, secondary).
+
+**Conditions per clip.**
+- **native**: the clip with the original question.
+- **image-only**: the clip's last frame, with the Addendum Z prompt.
+
+Exploratory, crop view only:
+- **PCD-oracle**: past = clip frames before S.
+- **PCD-crop**: past = clip frames before `last_change_robust` applied to the crop frames.
+
+**Models.** Qwen3-VL-8B, Qwen3.5-9B, InternVL3.5-8B, LLaVA-OV-7B, Gemma-3-12B, Qwen3-VL-32B.
+
+**Predictions (crop view; all outcomes will be reported).**
+- **AA0 (validity gate)**: a model enters AA1–AA3 only if its image-only crop accuracy at D=full is ≥ 0.6.
+- **AA1 (primary)**: pooled over included models, at D=0.5, image-only − native ≥ 0.10. Paired bootstrap CIs are given per model and pooled.
+- **AA2 (dose–response)**: pooled [image-only − native] at D=0.5 minus the same at D=full is > 0, with a paired bootstrap 95% CI excluding 0.
+- **AA3 (stale, diagnostic)**: on the stale-option items at D=0.5, P(stale | native wrong) − P(stale | image-only wrong) > 0 pooled, with a bootstrap CI excluding 0.
+  - This is the control that Z2 lacked.
+
+**Interpretation.**
+- **AA1 and AA2 hold**: the stale present occurs on real footage when the final state is recent, with the same dwell dependence as in §5.2. We then fetch the remaining letters videos of the valid split for a confirmatory replication.
+- **AA1 fails while AA0 holds**: even with a short final dwell and a readable crop, real footage does not show the effect at this n. We then look at what differs from the synthetic cells, e.g. gradual changes and hand occlusion, before any further claim.
+
+## Addendum AB: real frames on a synthetic timeline (registered 2026-09-28, before running; mechanism probe)
+
+**Question.** If AA shows no stale present on real footage, is that because of how the change happens (gradual, by a visible hand, with intermediate states), or because of what is shown (real images, word reading)?
+
+To separate the two, AB keeps the real crop frames and rebuilds the timeline the way the synthetic cells do: a long initial state, then an abrupt switch to a brief final state.
+
+**Items.** The AA letters items whose first letter action starts ≥ 1 s into the video. Letter segments are defined as in AA; A = the start frame of the earliest one.
+
+**Conditions (crop view, 2 fps).**
+- **natural**: the AA D=0.5 clip, re-run in the same session for pairing.
+- **splice**: the 2-fps grid frames before A (the real initial state, including camera noise and any people), then the video's last two grid frames (the real final state, 0.5 s).
+  - The manipulation segment is cut out.
+- **static**: the first frame repeated for as many frames as the splice's initial part, then the last frame repeated twice.
+  - No motion and no noise: the synthetic regime with real pixels.
+- **image-only**: the video's last frame, with the Addendum Z prompt.
+
+**Models.** Those that pass AA0.
+
+**Predictions.** These are two-sided hypotheses; we report whichever holds.
+- **AB1**: pooled image-only − native ≥ 0.10 in **static**.
+- **AB2**: pooled image-only − native in **splice** minus the same in **natural**, with a paired bootstrap CI.
+
+**Interpretation.**
+- **AB1 holds and splice > natural**: the stale present needs an abrupt, unexplained state switch; watching the manipulation protects the model.
+  - This refines the phenomenon.
+  - It points to a mechanism test: whether the visible action is what updates the model's "current state".
+- **AB1 holds but splice ≈ natural**: temporal redundancy (identical repeated frames) drives the effect, not the missing action.
+- **AB1 fails**: the effect does not transfer to real pixels even on the synthetic timeline. Next we test the synthetic side: render the same word-shuffle task synthetically, to check whether the task type (reading a word order) is what protects the model.
+
+## Addendum AC: the word-shuffle task rendered synthetically (registered 2026-09-28, before running; mechanism probe)
+
+**Why.** In AB, Qwen3-VL-8B and Qwen3.5-9B showed no stale present even on the static timeline built from real frames (image-only − native +0.04 and −0.13). AC separates the two remaining explanations:
+- **(i) real pixels** protect the model;
+- **(ii) the task** protects it: reading a letter order, rather than binding an attribute to a position as in the synthetic cells.
+
+**Stimuli.** One synthetic item per AA letters item (n=79).
+- Canvas: 448×252, plain light-grey table. Upright black letters on white square tiles (DejaVu Sans Bold), in a centred row.
+- **Initial word**: the item's stale option. For items without one, the first option that is not correct is used, and it becomes the stale option by construction.
+- **Final word**: the correct option.
+- **Timeline**: the same as the AB static condition. The initial frame is repeated n_init times (the item's AB value; 16 if absent), then the final frame is repeated twice, at 2 fps.
+
+**Questions.**
+- **order**: the original question, with the item's three options.
+- **position**: "What letter is at position k (from the left) at the end?", where k is the first position whose letter differs between the initial and final word.
+  - Options: the final letter, the initial letter, and a third letter (another letter of the word, else 'x').
+  - The option order is shuffled with a fixed seed.
+
+The **position** question is also asked on the AB static real clips of the items that have a stale option, with the final/initial word taken from the options.
+
+**Conditions.** native (the static synthetic clip) and image-only (the final frame).
+
+**Models.** Qwen3-VL-8B, Qwen3.5-9B, Qwen3-VL-32B, InternVL3.5-8B, LLaVA-OV-7B, Gemma-3-12B.
+
+**Predictions.**
+- **AC1**: synthetic **order**, pooled image-only − native ≥ 0.10. If it holds, explanation (i) is supported; if not, (ii).
+- **AC2**: synthetic **position**, pooled image-only − native ≥ 0.10. This is the within-stimulus check that the synthetic regime still produces the effect with this renderer.
+- **AC3**: on real static clips, **position** gap minus **order** gap, pooled (paired over items). This is exploratory.
+
+**Interpretation.**
+- **AC2 holds and AC1 fails**: the stale present is specific to position/attribute binding questions; whole-word reading is immune. This matches the real null.
+- **Both hold**: real pixels are what protects the model.
+- **AC2 fails**: this renderer does not reproduce the synthetic effect, and AC is uninformative.
+
+## Addendum AD: which timeline factors make the stale present strong (registered 2026-09-28, before running; mechanism probe)
+
+**Why.** The effect size differs sharply across stimuli:
+- Addendum M / chess cells: native is 0.3–0.6 below image-only.
+- Synthetic word tiles in AC: 0.11–0.18 below (Qwen3-VL-8B, Qwen3.5-9B).
+- Real letter videos in AA: about 0.1 of image-correct items flip.
+
+The M cells and the AC word cells differ in three timeline factors, and AD crosses them on the AC word tiles:
+- **m**, the number of prior states: 1 vs 4.
+  - With m=4, the prior states are the initial word followed by 3 further distinct permutations. The **penultimate** state is the stale one.
+- **fps**, the sampling rate given to the model: 2 vs 4.
+- **dur**, the duration of each prior state: 1 s vs 4 s.
+
+The final dwell is fixed at 0.5 s. With m=1, the prior state is the item's AC initial word.
+
+**Items and questions.** The 79 AC words, minus those with fewer than 3 further orderings (2-letter words, repeated letters; 12 items, fixed before running).
+- **position**: as in AC, with k = the first position where the penultimate and final words differ. Options: the final letter, the penultimate letter, a third letter.
+- **order**: options are the final word, the penultimate word, and one other permutation. With m=1 these are the item's original options.
+
+The option order is shuffled with a fixed seed. Image-only (the final frame) is shared across cells.
+
+**Models.** Qwen3-VL-8B, Qwen3.5-9B, InternVL3.5-8B, LLaVA-OV-7B, Gemma-3-12B.
+
+**Hypotheses** (each is a main effect on image-only − native, pooled over models, questions and the other factors, with a paired bootstrap 95% CI):
+- **AD-m**: m=4 > m=1.
+- **AD-fps**: 4 fps > 2 fps.
+- **AD-dur**: 1 s > 4 s.
+
+The cell with the largest gap is reported per model, and whether it reaches the M-cell size (≥ 0.3).
+
+**Interpretation.** A factor with a clear main effect is a trigger condition of the stale present. We then check whether real footage has it: repeated changes, fast sampling, short prior states. If none of the three matters, the difference lies in the rendering (tiles vs coloured objects) and we cross that next.
+
+## Addendum AE: real footage, stale option = the actual penultimate arrangement (registered 2026-09-28, before running)
+
+**Why.** Two results motivate AE:
+- **AD** (Qwen3-VL-8B, the first model to finish): the number of prior states is the dominant factor. With one prior state the gap is 0.09–0.37; with four it is 0.31–0.57, the size of the M cells.
+- **Box tracks show that real shuffles are multi-step.** Reconstructing the letter order from the official 1-fps letter boxes gives these numbers of changes over 74 items:
+
+  | Changes | 1 | 2 | 3–13 |
+  |---|---|---|---|
+  | Items | 8 | 24 | 42 |
+
+  So the penultimate arrangement is usually an intermediate one.
+
+The Z/AA stale option (the beginning order) was therefore mostly not the penultimate state, and the options could not register a penultimate-state answer at all.
+
+**State sequence.** At every annotated frame where all letter boxes exist, the letters are sorted along the final row's main axis (x or y). The direction is flipped if that reproduces the correct option. Items where neither direction matches are excluded (5 of 79). Consecutive duplicates are merged. The **penultimate** state is the last state that differs from the final one.
+
+**Questions** (option order shuffled with a fixed seed):
+- **position**: "At the end, which letter is in the k-th place of the letter sequence?" Here k is the first place where the penultimate and final states differ. Options: the final letter, the penultimate letter, and a third letter.
+- **order**: the original question, with options: final, penultimate, and one other permutation (the beginning order if it is neither, else a random one).
+
+**Clips.** The AA crop view: D=0.5 (primary) and D=full. Image-only uses the clip's last frame.
+
+**Models.** Qwen3-VL-8B, Qwen3.5-9B, InternVL3.5-8B, LLaVA-OV-7B, Gemma-3-12B, Qwen3-VL-32B.
+
+**Predictions.**
+- **AE1**: at D=0.5, pooled image-only − native ≥ 0.10 on position questions (paired bootstrap over items, stratified by model). The same is reported for order questions.
+- **AE2**: at D=0.5, P(penultimate | native wrong) − P(penultimate | image-only wrong) > 0, pooled, with a bootstrap CI excluding 0.
+- **AE3 (exploratory)**: the gap is larger for items with ≥ 3 changes than for items with ≤ 2.
+
+**Interpretation.**
+- **AE1/AE2 hold**: the stale present exists on real footage. Z/AA missed it because the options targeted the wrong state.
+- **AE1 fails**: the real-footage effect is weak even when measured at the right state.
+
+## Addendum AF: same-pipeline no-history control for the real-footage comparisons (registered 2026-09-28, before running)
+
+**Why.** Every real-footage contrast so far (Z, AA, AB, AE) compares a video with a single image. On real footage this confounds the effect of history with the input pipeline: the video path uses lower per-frame resolution and, in Qwen, merges pairs of frames.
+- The confound is negligible on the large synthetic stimuli, where image-only ≈ 1.0.
+- On small real letters it can lower native accuracy by itself.
+- This would explain drops without a rise in penultimate answers (AE Qwen pooled: gap +0.097, but the penultimate share of errors is −0.07; LLaVA-OV in AB).
+
+**Condition.** **frozen**: the clip's last frame repeated as many times as the clip has frames, fed through the video path with the native prompt. It has the same pipeline and per-frame resolution as native, and no history.
+
+**Scope.** All AE questions (position and order), at D=0.5 and D=full, for the AE models. The native and image-only answers are taken from AE.
+
+**Predictions.**
+- **AF1 (history effect, primary)**: pooled frozen − native at D=0.5 on position questions ≥ 0.10. Paired bootstrap stratified by model.
+- **AF2**: P(penultimate | native wrong) − P(penultimate | frozen wrong) > 0 at D=0.5, pooled, with the CI excluding 0.
+- **AF3 (pipeline effect, descriptive)**: image-only − frozen.
+
+**Interpretation.**
+- **AF1 and AF2 hold**: history causes stale answers on real footage.
+- **AF1 fails while AF3 > 0**: the real-footage gaps come from the video pipeline, not from history. The real-footage stale present at this stimulus scale is then not supported, and this control must accompany any future real-footage claim.
+
+## Addendum AG: real frames on the synthetic timeline (registered 2026-09-28, before running)
+
+**Why.**
+- On synthetic tiles, the number of prior states (m) and their duration drive the stale present (AD: m 1→4 +0.24; dur 1→4 s +0.07).
+- In natural real shuffles, the intermediate states are brief and occluded by hands; the history effect is ≈0.10 (AF), and it points at the penultimate state only in some models.
+- AG holds the images real and imposes the AD timeline. This separates "real images block it" from "real timelines are too brief".
+
+**Stimuli.**
+- For each AE item and each reconstructed state (1-fps boxes), take one real crop frame: the 2-fps grid frame nearest the midpoint of that state's interval.
+- The final frame is the AE D=full last frame.
+- Clips run at 2 fps: each prior state is held 4 s (8 frames); the final state is held 0.5 s (1 frame).
+- **held_m1**: the penultimate state, then the final state.
+- **held_mK**: the last K = min(4, number of prior states) prior states, in order, then the final state.
+- **frozen_m1 / frozen_mK**: the final frame repeated to the same length as the matching held clip (same video path, no history).
+- Questions, options and answers are those of AE (position and order); image-only answers come from AE D=full.
+
+**Predictions (6 AE models; paired bootstrap stratified by model).**
+- **AG1 (primary)**: position questions, frozen_mK − held_mK ≥ 0.10 pooled.
+- **AG2**: P(penultimate | held_mK) − P(penultimate | frozen_mK) > 0, with the CI excluding 0.
+  - This is an unconditional rate. The conditional share used in AE2/AF2 mixes the effect with accuracy changes and was underpowered.
+- **AG3**: among items with ≥3 prior states, gap(mK) − gap(m1) > 0, with the CI excluding 0.
+- Order questions are secondary and descriptive.
+
+**Interpretation.**
+- **AG1 and AG2 hold**: real images carry the stale present once the timeline has several well-held prior states. Natural real footage is weak because its intermediate states are brief and occluded.
+- **AG1 fails**: something about real images (clutter, small letters, hands) blocks it, and the synthetic effect does not transfer through the image domain.
+
+### Addendum AG, revision 1 (2026-09-28, before any model was run)
+
+**What was found when checking the stimuli.**
+- The mid-interval frames of the AE states mostly show hands carrying letters. Many AE "states" are transit orders: a carried letter is sorted among the resting ones.
+- Resting states are therefore redefined. A 1-fps sample is at rest when no letter centroid moves more than 0.25 × the median letter height, both from the previous sample and to the next one. Consecutive at-rest samples with the same order form one state. The representative frame is the 2-fps grid frame nearest the middle of the run.
+- Counts over the 73 items:
+  - 45 have exactly 1 resting prior state (almost always the initial order);
+  - 7 have 2;
+  - 22 have none different from the final order, or no resting final state;
+  - 5 are unmatched.
+- Real shuffles thus offer essentially m=1. The m=K arm and AG3 are dropped.
+- Post hoc caveat for AE: its "penultimate state" is often a transit order. AE's exploratory splits should be read with this in mind.
+
+**Revised design (the 52 items with at least 1 resting prior state).**
+- Questions are rebuilt from the resting states, using `tracking_algo_real4.build` with the resting sequence and seed 20260930. The stale option is the last resting prior state.
+- Conditions at 2 fps, with the prior state held 4 s (8 frames) and the final state 0.5 s (1 frame):
+  - **real**: real frames. Arms: held (prior frame ×8 + final frame), frozen (final frame ×9), image-only (final frame).
+  - **syn**: the same words rendered as AC/AD tiles. Arms: held, frozen, image-only.
+- Models: the 6 AE models.
+
+**Predictions (paired bootstrap stratified by model).**
+- **AG1 (primary)**: real, position question, frozen − held ≥ 0.10 pooled.
+- **AG2**: real, P(stale | held) − P(stale | frozen) > 0, with the CI excluding 0.
+- **AG3' (domain, descriptive)**: (frozen − held)_syn − (frozen − held)_real, with CI.
+- Order questions are secondary.
+
+**Interpretation.**
+- **AG1 and AG2 hold**: with one clean, well-held prior state, real images show the stale present.
+- **AG1 fails while syn shows the effect**: the image domain (real clutter, orientation, size) weakens it.
+
+## Addendum AH: layer-resolved masking on the AG real clips (registered 2026-09-28, before running)
+
+**Why.**
+- AG showed that a clean, well-held real prior state raises P(stale) by ≈0.10, as much as rendered tiles do.
+- On synthetic stimuli the stale answer is retrieved by the text positions in a mid-depth window: Qwen3-VL-8B L18–26 (§5.4), Gemma-3-12B L18–23 and its global layers (Y).
+- AH asks whether the real-footage effect runs through the same window, or through something else (e.g. vision-stage mixing of real frames).
+
+**Stimuli.** The AG rev. 1 held clips (prior ×8 + final, 2 fps) for the 52 items, real and syn domains, position questions only (order questions showed no effect in AG). Items, questions and options are regenerated exactly as in AG (same loop, seed 20260930).
+
+**Method.**
+- An SDPA wrapper blocks every text position after the last visual token from the visual tokens of the prior-state frames (`prior`) or of the final frame (`fin`) in chosen LLM layers (as in Y).
+- Qwen3-VL: the 9 frames form 5 temporal groups; groups 0–3 are prior, group 4 is final (+ its pad).
+- Multi-image and LLaVA-OV inputs: frames 0–7 prior, frame 8 final; frame spans are found from the visual-token positions.
+- Conditions: none; prior in all layers; fin in all layers; prior in each depth band (Qwen3-VL-8B: 4 bands of 9 layers; LLaVA-OV-7B: 4 bands of 7; Gemma-3-12B: 8 bands of 6, plus global-only and sliding-only).
+- Sanity check: the `none` answers must agree with the AG `held` answers on ≥95% of items; otherwise the run is invalid.
+
+**Models.** Qwen3-VL-8B (primary: the largest real-domain effect in AG, 0.21 → 0.40), LLaVA-OV-7B (exploratory: also large, 0.17 → 0.42; no prior layer data), Gemma-3-12B (exploratory: small real effect in AG, 0.29 → 0.35).
+
+**Predictions (Qwen3-VL-8B, real, position; McNemar on paired items).**
+- **AH1 (primary)**: P(stale | none) − P(stale | prior_all) ≥ 0.10, with McNemar p < 0.05 on stale vs not-stale.
+- **AH2**: the L18–26 band recovers ≥50% of the prior_all reduction in P(stale), and more than any other single band.
+- **AH3 (control)**: fin_all raises P(stale) over none.
+- syn domain and the other two models are descriptive.
+
+**Interpretation.**
+- **AH1 and AH2 hold**: the real-footage stale present is the same mid-layer retrieval as the synthetic one.
+- **AH1 holds, AH2 fails**: masking the prior state helps, but the retrieval sits elsewhere on real footage.
+- **AH1 fails**: the real effect is not removed by blocking text→prior attention; it is mixed into the final-state tokens earlier (vision stage or visual positions).
