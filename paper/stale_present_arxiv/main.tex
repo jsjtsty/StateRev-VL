@@ -290,7 +290,7 @@ The second term measures what the model would answer from the past alone, so the
 
 Asked what a video shows at its end, many current open video VLMs answer with what it showed just before. The failure grows with the number of similar earlier states and with a brief final state, and it does not depend on frame rate. It is produced by a mid-layer retrieval from the question tokens to the previous state's visual tokens, and it can be removed at inference time. It appears on real frames as strongly as on rendered ones once a clean previous state is present. The newest model we tested does not show it. For pure present-state questions, the last frame is the strongest baseline, and any fix should be compared against it.
 
-\paragraph{Reproducibility.} Code, stimulus generators and the preregistration file will be released at \textcolor{red}{[URL --- TODO]}.
+\paragraph{Reproducibility.} Code, stimulus generators and the preregistration file are available at \url{https://github.com/jsjtsty/StateRev-VL}.
 
 {\small
 \bibliographystyle{ieeenat_fullname}
