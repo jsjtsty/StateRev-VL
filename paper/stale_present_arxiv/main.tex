@@ -1,27 +1,24 @@
-\documentclass[10pt]{article}
-\usepackage[margin=1in]{geometry}
-\usepackage[T1]{fontenc}
-\usepackage{lmodern}
-\usepackage{microtype}
+% Preprint in the CVPR author-kit style (https://github.com/cvpr-org/author-kit), arXiv version.
+\documentclass[10pt,twocolumn,letterpaper]{article}
+\usepackage[pagenumbers]{cvpr}
 \usepackage{amsmath}
 \usepackage{booktabs}
-\usepackage{multirow}
 \usepackage{graphicx}
 \usepackage{xcolor}
-\usepackage[numbers,sort&compress]{natbib}
-\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
-\usepackage{caption}
-\captionsetup{font=small,labelfont=bf}
+\usepackage{microtype}
+\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
+\def\paperID{*****}
+\def\confName{CVPR}
+\def\confYear{2026}
 
 \newcommand{\pstale}{P(\text{stale})}
 
 \title{The Stale Present: Video-Language Models Often Report\\the Previous State Instead of the Current One}
-\author{%
-  \textcolor{red}{[Author names --- TODO]}\\
-  \textcolor{red}{[Affiliation --- TODO]}\\
-  \texttt{\textcolor{red}{[email --- TODO]}}
+\author{Tianyang Sun\\
+Harbin Institute of Technology\\
+{\tt\small 25s103212@stu.hit.edu.cn}
 }
-\date{}
 
 \begin{document}
 \maketitle
@@ -47,12 +44,12 @@ This paper is an analysis paper. Most tests were preregistered in a versioned fi
 
 We are explicit about the limits (\S\ref{sec:limits}). The newest model we tested is immune; sample sizes are 50--100 per cell; and the strongest real-footage effect uses a spliced timeline.
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
-  \includegraphics[width=\linewidth]{figs/fig_models.pdf}
+  \includegraphics[width=0.85\linewidth]{figs/fig_models.pdf}
   \caption{\textbf{The stale present across models.} Accuracy on ``what is at [position] at the very end?'' when the model sees the last frame only (orange) or the full video (blue, 95\% bootstrap CI). (a) Synthetic colored layouts with four prior layouts and a 0.5\,s final layout ($n=60$ per model). (b) Real chess games, capture squares, one prior move, 0.5\,s final position ($n=100$). For Qwen3.6-27B only the video condition was run. In (b), Idefics3-8B is omitted because it cannot read the board (last-frame accuracy 0.48).}
   \label{fig:models}
-\end{figure}
+\end{figure*}
 
 \section{Related work}
 
@@ -116,7 +113,7 @@ The difference between the frozen video and the real video isolates the effect o
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=0.62\linewidth]{figs/fig_timeline.pdf}
+  \includegraphics[width=\linewidth]{figs/fig_timeline.pdf}
   \caption{\textbf{More prior states, and longer ones, make the present staler.} Pooled last-frame minus video accuracy (5 models, $n=67$ each; averaged over 2 and 4\,fps, which had no effect). The final state is held 0.5\,s. (a) Position questions. (b) Order questions, which need all letters: with a single prior state they show no gap.}
   \label{fig:timeline}
 \end{figure}
@@ -137,12 +134,12 @@ The difference between the frozen video and the real video isolates the effect o
 \end{itemize}
 In the two models where masking works, the stale answer is fetched by the question tokens from the previous state's visual tokens in middle layers. The remaining gap to the last-frame control (0.81 vs 1.00 in Qwen3-VL-8B) presumably sits in the visual token stream itself. For Idefics3 and Qwen2.5-VL, more of the effect seems to sit there.
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
-  \includegraphics[width=\linewidth]{figs/fig_layers.pdf}
+  \includegraphics[width=0.85\linewidth]{figs/fig_layers.pdf}
   \caption{\textbf{The stale answer is retrieved in middle layers.} Drop in \pstale{} when the question tokens are blocked from the previous state's visual tokens within one band of layers (x: band center divided by the number of layers). (a) Synthetic videos: Qwen3-VL-8B ($n=240$, $D_\text{fin}\le1$\,s) and Gemma-3-12B ($n=320$). (b) Real frames with a clean prior state held 4\,s (\S\ref{sec:real}; $n=52$ per model). Shallow and deep bands have no effect.}
   \label{fig:layers}
-\end{figure}
+\end{figure*}
 
 \section{Real footage}
 \label{sec:real}
@@ -158,7 +155,7 @@ A further check explained this. Most reconstructed ``previous states'' are trans
 
 \paragraph{Real frames on a controlled timeline.} For the 52 videos with a resting prior state, we built clips at 2\,fps: a real frame of that state held 4\,s, then the real final frame for 0.5\,s. The same timeline was also rendered with letter tiles. Table~\ref{tab:ag} shows the result. History raises \pstale{} by $+0.103$ [0.054, 0.151] on real frames and by $+0.106$ on tiles, so the preregistered prediction on \pstale{} is supported. The accuracy prediction failed narrowly ($+0.096$ against the threshold of 0.10). The domain difference is $+0.035$ [$-0.022$, 0.093]. Real images do not block the stale present; natural timelines rarely set it up. The largest real-frame effects are in Qwen3-VL-8B (0.21$\to$0.40) and LLaVA-OV-7B (0.17$\to$0.42). Order questions show no effect in either domain, as expected at $m=1$.
 
-\begin{table}[t]
+\begin{table*}[t]
   \centering
   \small
   \caption{\textbf{Real frames vs.\ rendered tiles on the same timeline} (prior state 4\,s, final 0.5\,s; 6 models $\times$ 52 items, position questions). Frozen: the final frame repeated through the video pipeline.}
@@ -171,7 +168,7 @@ A further check explained this. Most reconstructed ``previous states'' are trans
     Rendered tiles & 0.92 & 0.94 & 0.80 & $+0.131$ [0.096, 0.170] & 0.04 $\to$ 0.15 \\
     \bottomrule
   \end{tabular}
-\end{table}
+\end{table*}
 
 \paragraph{The same mid-layer retrieval on real frames.} We applied band masking to these real clips (preregistered; Figure~\ref{fig:layers}b, Table~\ref{tab:ah}). In all three models, the unmasked answers reproduced the earlier run exactly.
 \begin{itemize}
@@ -181,7 +178,7 @@ A further check explained this. Most reconstructed ``previous states'' are trans
 \end{itemize}
 We had predicted that Qwen3-VL-8B's synthetic band (18--26) would also be the best band on real frames. It recovered 62\% of the effect, but the adjacent band 9--17 did slightly better, by one item. The localization thus holds at the level of ``middle layers'' but is broader and slightly shallower on real frames.
 
-\begin{table}[t]
+\begin{table*}[t]
   \centering
   \small
   \caption{\textbf{Band masking on real frames} ($n=52$ per model). \pstale{} (accuracy in parentheses). Counts: items that stopped / started being stale; McNemar $p$.}
@@ -198,15 +195,16 @@ We had predicted that Qwen3-VL-8B's synthetic band (18--26) would also be the be
     frozen video (no history) & 0.21 & 0.17 & 0.29 \\
     \bottomrule
   \end{tabular}
-\end{table}
+\end{table*}
 
 \section{A training-free fix and where it stops working}
 \label{sec:fix}
 
 \paragraph{Method.} We first locate the last change $t_c$ with a pixel change detector. \emph{Present-contrastive decoding} (PCD) then scores each option as
 \[
-s(a) = \log p(a \mid \text{video}) - \alpha \log p(a \mid \text{video}_{<t_c}), \qquad \alpha = 1 \text{ (preregistered)}.
+s(a) = \log p(a \mid \text{video}) - \alpha \log p(a \mid \text{video}_{<t_c}),
 \]
+with $\alpha = 1$ fixed in the preregistration.
 The second term measures what the model would answer from the past alone, so the stale option is penalized. For Qwen3-VL we also test \emph{change-point masking} (CPM), which applies the mid-layer mask of \S\ref{sec:mechanism} to all visual tokens before $t_c$.
 
 \paragraph{Pure present-state questions: no better than the last frame.} PCD removes most stale answers (Table~\ref{tab:fix}). For example, Qwen3-VL-8B on chess goes from 0.20 to 0.84, with \pstale{} from 0.78 to 0.04, and CPM performs similarly. But reading the last frame alone is just as good. Across 88 model$\times$cell comparisons (9 models), PCD is never significantly above the last frame after Holm correction. In 8 of them it is significantly below, e.g.\ Gemma-3 on layouts ($-0.27$) and Idefics3 on layouts ($-0.25$). If a question asks only about the present, the right fix is to answer from the last frame.
@@ -222,7 +220,7 @@ The second term measures what the model would answer from the past alone, so the
   \item \textbf{Noise amplification.} It can amplify noise in a model that ignores the input: Idefics3's single-ball control fell from 0.44 to 0.04.
 \end{itemize}
 
-\begin{table}[t]
+\begin{table*}[t]
   \centering
   \small
   \caption{\textbf{Training-free fixes.} Accuracy: last frame / video / PCD ($\alpha=1$). Chess and layouts ($m=4$) with $D_\text{fin}=0.5$\,s. History questions: ``what is now on the square where the first move landed?'', $D_\text{fin}=2$\,s, $n=100$. The last-frame value there is unpaired.}
@@ -238,7 +236,7 @@ The second term measures what the model would answer from the past alone, so the
     Gemma-3-12B & 0.95 / 0.61 / 0.93 & 1.00 / 0.30 / 0.73 & 0.45 / 0.45 / \textbf{0.64} \\
     \bottomrule
   \end{tabular}
-\end{table}
+\end{table*}
 
 \section{Limitations and discussion}
 \label{sec:limits}
@@ -255,7 +253,9 @@ Asked what a video shows at its end, many current open video VLMs answer with wh
 
 \paragraph{Reproducibility.} Code, stimulus generators and the preregistration file will be released at \textcolor{red}{[URL --- TODO]}.
 
-\bibliographystyle{plainnat}
+{\small
+\bibliographystyle{ieeenat_fullname}
 \bibliography{refs}
+}
 
 \end{document}
