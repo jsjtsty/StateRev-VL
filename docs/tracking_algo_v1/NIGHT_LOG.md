@@ -1051,7 +1051,7 @@ Letters, image-only − native, with 95% CI:
 
 **Scheduling.** GPUs 0/1 idled after the Y runs. The queue tails were replaced by `run_tracking_algo_queue_rest2.sh`; the running dumps were untouched. The X dumps (gemma3_12b, internvl35_8b, llava_ov7b, internvl_gptoss) are still running. Addendum X is written up after they finish.
 
-### 8i. Real-footage follow-ups AA–AF (2026-09-28)
+### 8i. Real-footage follow-ups AA–AG (2026-09-28)
 
 - **AA** (last change → 0.5 s / 2 s / full, crop view, 6 models): pooled image-only − native +0.011 [−0.030, +0.051]; AA2 +0.006. Fails. Dwell length was not why Z failed. Summary: `real2_summary.md`.
 - **AB/AC** (real vs synthetic tiles, natural/splice/static timelines): on synthetic tiles the position question shows gaps of +0.13 to +0.49 on the 7–12B models; 32B is at ceiling. Real-frame gaps are small and mixed. Real shuffles are multi-step: of 74 reconstructable items, 8 have 1 change, 24 have 2 and 42 have 3–13. The Z "stale option" (the beginning order) is the true penultimate state in only 10 of 73 items.
@@ -1079,7 +1079,7 @@ Letters, image-only − native, with 95% CI:
   - Order questions: ≈0 in both domains.
   - `real6_summary.md`.
 
-### 8k. Addendum AH: layer masking on the AG real clips (2026-09-28)
+### 8j. Addendum AH: layer masking on the AG real clips (2026-09-28)
 - Prereg in PREREG.md (AH) before running. `scripts/tracking_algo_real7.py`, `run_tracking_algo_queue_ah.sh`, stats `tracking_algo_real7_stats.py` → `real7_summary.md`.
 - Sanity: `none` answers agree 100% with AG held answers (all 3 models, both domains).
 - Real, position, P(stale) none → prior_all: Qwen3-VL-8B 0.404 → 0.250 (9:1, p=0.02; AH1 holds), LLaVA-OV 0.423 → 0.212 (12:1, p=0.003), Gemma 0.346 → 0.250 (6:1, p=0.13).
