@@ -105,5 +105,56 @@ def fig_layers():
         print(k, [f'L{a}-{b}:{y:+.3f}' for (a, b), y in zip(bands, ys)])
 
 
+def fig_stimuli():
+    """Example stimuli: synthetic layouts (m=4), a real chess capture (m=1), and a real Perception Test clip
+    with its rendered-tile counterpart (Addendum AG)."""
+    import sys
+    import zipfile
+    root = HERE.parents[2]
+    sys.path.insert(0, str(root / 'scripts'))
+    M = json.loads(next(l for l in open(OUT / 'data_now2/items.jsonl') if '"M4_f0.5_00"' in l))
+    fm = np.load(OUT / 'data_now2/M4_f0.5_00.npz')['frames']
+    C = json.loads(open(OUT / 'data_chess_cap/items.jsonl').readline())
+    fc = np.load(OUT / f'data_chess_cap/{C["id"]}.npz')['frames']
+    from tracking_algo_real2 import D, ANN
+    from tracking_algo_real6 import resting_states, domain_clips
+    ann = json.load(zipfile.ZipFile(ANN).open('all_valid.json'))
+    it = next(json.loads(l) for l in open(D / 'items.jsonl') if '"video_183"' in l)
+    rs = resting_states(ann[it['id']], it['options'][it['gt']])
+    z = np.load(D / f'{it["id"]}.npz'); cl = domain_clips(it, rs, z['crop'], z['fidx'])
+    names, pos = ['blue', 'green', 'yellow'], ['left', 'middle', 'right']
+    fig = plt.figure(figsize=(6.8, 3.55))
+    sa, bot = fig.subfigures(2, 1, height_ratios=[0.85, 1.55])
+    sb, sc = bot.subfigures(1, 2, width_ratios=[0.84, 1.16], wspace=0.0)
+    sa.subplots_adjust(left=0.01, right=0.99, top=0.74, bottom=0.0, wspace=0.05)
+    sb.subplots_adjust(left=0.02, right=0.98, top=0.76, bottom=0.02, wspace=0.06)
+    sc.subplots_adjust(left=0.02, right=0.99, top=0.76, bottom=0.02, wspace=0.05, hspace=0.35)
+    def band(img, ref):
+        # centre crop of the tile render with the aspect ratio of the real crop
+        h = int(round(img.shape[1] * ref.shape[0] / ref.shape[1])); t = (img.shape[0] - h) // 2
+        return img[t:t + h]
+    kw = dict(fontsize=7, color=INK, x=0.01, y=0.98, ha='left', va='top')
+    starts = [0, 10, 14, 18, 22]
+    labels = ['reveal (2.5 s)', 'prior 1 (1 s)', 'prior 2 (1 s)', 'prior 3 (1 s)', 'final (0.5 s)']
+    for j, (st, lab) in enumerate(zip(starts, labels)):
+        ax = sa.add_subplot(1, 5, j + 1); ax.imshow(fm[st + 1]); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(lab, fontsize=7, color=ORANGE if j == 3 else (BLUE if j == 4 else INK2))
+    sa.suptitle(f'(a) Synthetic layouts, m = 4.  Q: "At the very end, what color is the cup in the {pos[M["p"]]} position?"  '
+                f'Correct: {names[M["layouts"][-1][M["p"]]]}; stale: {names[M["layouts"][-2][M["p"]]]}.', **kw)
+    for j, (fr, lab) in enumerate(((fc[1], 'prior (1 s)'), (fc[-1], 'final (0.5 s)'))):
+        ax = sb.add_subplot(1, 2, j + 1); ax.imshow(fr); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(lab, fontsize=7, color=ORANGE if j == 0 else BLUE)
+    sb.suptitle(f'(b) Real chess game, capture move.\nQ: "At the very end, what is on square {C["square"]}?"\n'
+                f'Correct: {C["options"][C["gt"]]}; stale: {C["options"][C["pen"]]}.', **kw)
+    for j, (fr, lab, col) in enumerate(((cl['real']['held'][0], 'real, prior (4 s)', ORANGE), (cl['real']['img'], 'real, final (0.5 s)', BLUE),
+                                        (band(cl['syn']['held'][0], cl['real']['img']), 'tiles, prior (4 s)', ORANGE),
+                                        (band(cl['syn']['img'], cl['real']['img']), 'tiles, final (0.5 s)', BLUE))):
+        ax = sc.add_subplot(2, 2, j + 1); ax.imshow(fr); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(lab, fontsize=7, color=col)
+    sc.suptitle('(c) Real Perception Test clip and its rendered-tile twin.\n'
+                'Q: "At the end, which letter is in the first place?"\nCorrect: C; stale: A.', **kw)
+    fig.savefig(HERE / 'fig_stimuli.pdf', bbox_inches='tight', dpi=200)
+
+
 if __name__ == '__main__':
-    fig_models(); fig_timeline(); fig_layers()
+    fig_models(); fig_timeline(); fig_layers(); fig_stimuli()

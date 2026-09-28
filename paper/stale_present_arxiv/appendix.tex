@@ -1,0 +1,234 @@
+% Supplementary material, placed after the references.
+\clearpage
+\appendix
+\onecolumn
+\setcounter{table}{0}
+\renewcommand{\thetable}{A\arabic{table}}
+
+\begin{center}
+  {\Large\bfseries Appendix}
+\end{center}
+
+\section{Question templates and scoring}
+\label{app:prompts}
+
+All questions end with ``Answer with only the letter.'' Options are written inline as ``(A) \dots{} (B) \dots{} (C) \dots''. The video (or image list) comes before the text in a single user turn.
+
+\begin{itemize}
+  \item \textbf{Cup layouts}: ``The video shows three cups of different colors (blue, green, yellow). At the very end of the video, what color is the cup in the \{left, middle, right\} position? (A) blue (B) green (C) yellow.''
+  \item \textbf{Disks}, position-keyed: ``The video shows colored disks in three positions (left, middle, right) that are rearranged several times. At the very end of the video, what is in the \{position\} position?'' Object-keyed: ``\dots{} where is the \{color\} disk?'' with options Left/Middle/Right.
+  \item \textbf{Single digit / single ball}: ``The video shows a sequence of digits. What digit is shown at the very end of the video?'' and ``The video shows a red ball that jumps between positions. Where is the ball at the very end of the video?''
+  \item \textbf{Chess}: ``The video shows a chess game, one position after another. At the very end of the video, what is on square \{square\}?'' Options are piece names such as ``white pawn''.
+  \item \textbf{History-referenced chess}: ``\dots{} At the very end of the video, what is on the square where the first move of the video ended?''
+  \item \textbf{History-referenced disks}: ``\dots{} At the very end of the video, what color is the disk in the position where the \{color\} disk was at the beginning of the video?''
+  \item \textbf{Perception Test}: the original MVBench order question (``What is the order of the letters at the end?''), or our position question ``At the end, which letter is in the \{first, second, \dots\} place of the letter sequence?''
+\end{itemize}
+
+\paragraph{Controls.} For the last-frame control, ``The video shows'' becomes ``The image shows'' and references to the end of the video are removed (e.g.\ ``The image shows a chess board. What is on square \{square\}?''). For Perception Test the prefix is ``The image shows the last frame of a video.'' For image-list input, each frame is preceded by ``Frame $i$:'' (Gemma-3, Idefics3, InternVL3.5-GPT-OSS) or ``Frame $i$ ($t$\,s):'' (the Qwen image-mode test).
+
+\paragraph{Scoring.} We run one forward pass and read the logits at the first generated position. The score of an option is the maximum logit over the tokenizer's variants of its letter (e.g.\ ``A'' and `` A''). Thinking is disabled for Qwen3.5 through the chat template. No sampling is used anywhere except in the chain-of-thought test.
+
+\section{Stimulus construction}
+\label{app:stimuli}
+
+\paragraph{Cups and disks.} A 2D side-view renderer draws three cups (or disks) on a table at $448\times336$ pixels and 4\,fps. The reveal layout lifts the cups and shows the ball. Each later layout is a random permutation of the colors that differs from the previous one; the queried position is chosen so that its content differs between the last two layouts. Non-final layouts are held 1\,s. Seeds are fixed per dataset.
+
+\paragraph{Chess.} We take move windows from the MET-Bench-Chess evaluation games (real MillionBase games) and render each position as a $448\times448$ board with piece glyphs and file/rank labels, at 4\,fps. A window shows $m$ moves; non-final positions are held 1\,s. For the capture questions, the queried square is the destination of the last move and that move is a capture, so the previous content is the captured piece. We first also queried source squares (correct answer ``empty''), but the models almost never answer ``empty'' even from the final board (0.04--0.10), so those cells were dropped as an option bias. For the history-referenced questions we select windows of exactly two moves in which the second move recaptures on the square where the first move landed.
+
+\paragraph{Word tiles.} For each Perception Test letter item, the letters are drawn as black-on-white tiles on a gray background, in the order of the corresponding state. For the factorial study, prior states are orders of the same letters that differ from their neighbors; the last prior state differs from the final order at the queried place.
+
+\section{Real-footage pipeline}
+\label{app:real}
+
+\paragraph{Source.} We use the Perception Test videos that ship with MVBench and the official Perception Test annotations (\texttt{all\_valid.json}), which provide per-second bounding boxes for each letter and action segments. We keep the letter-order questions (79 in the pilot).
+
+\paragraph{Crop and settle frame.} The crop is the union of all letter boxes over the video, padded by 50\% of its size on each side, cut from the $1920\times1080$ source and resized to 448\,px width. The settle frame is the last end frame of any action segment whose objects include a letter.
+
+\paragraph{Resting states.} From the per-second boxes we compute each letter's centroid. A sample is \emph{at rest} if no letter centroid moves more than $0.25\times$ the median letter height from the previous sample and to the next one. Consecutive resting samples with the same left-to-right order form a run; runs with a repeated order are merged. An item is kept if the last run spells the correct final word (reading direction chosen by the larger spread of the final centroids). Of 73 reconstructable items, 45 have exactly one resting prior state, 7 have two and 22 have none. Without the resting criterion, 42 of 74 videos contain 3--13 order changes, most of them transit orders while a hand carries a letter.
+
+\paragraph{Controlled clips.} For the 52 items with a resting prior state, the prior frame is the crop frame closest to the middle of the prior run, and the final frame is the crop frame at the end of the video. The held clip repeats the prior frame 8 times and appends the final frame (2\,fps: 4\,s then 0.5\,s). The frozen clip repeats the final frame 9 times. The tile clips follow the same timeline.
+
+\section{Band masking}
+\label{app:mask}
+
+\paragraph{Implementation.} We register a custom attention function (a wrapper around PyTorch SDPA) with the Transformers attention interface. In the chosen language-model layers, it sets the attention mask to $-\infty$ from every query position after the last visual token to every key position of the chosen state's visual tokens. Vision-encoder layers and visual query positions are never modified. For Qwen3-VL on synthetic videos we used eager attention with the same mask.
+
+\paragraph{Token spans.} For Qwen models, the video grid gives $T$ temporal groups of equal size; in the real clips groups $0..T{-}2$ are the prior state and group $T{-}1$ the final state. For image-list models (Gemma-3, Idefics3), each frame's image tokens are located by the image token id. For LLaVA-OneVision, the video tokens are split evenly over the 9 frames, excluding one trailing newline token. In the synthetic datasets, state boundaries come from a pixel change detector (a frame starts a new state if more than 0.1\% of its pixels change by more than 40 gray levels).
+
+\paragraph{Bands.} Layers are split into 4 equal bands (36- and 28-layer models) or 8 bands (Gemma-3-12B, 48 layers). Gemma-3 has one global-attention layer every six layers (8 in total) and sliding-window layers otherwise; we also mask only the global or only the sliding layers. Unmasked answers reproduced the earlier unmasked runs exactly for all three models on real frames, which checks that the wrapper does not change the computation when no mask is set.
+
+\paragraph{Gemma-3-12B on synthetic stimuli.} Table~\ref{tab:gemma} gives the full band results behind Figure~\ref{fig:layers}a. Idefics3-8B: no mask 0.45, previous state masked in all layers 0.50 (29:13, $p=0.02$); the preregistered gain of 0.15 is not reached. Qwen2.5-VL-7B: no mask 0.39 (\pstale{} 0.37); layers 14--20 0.44 (0.28); all layers 0.45 (0.25).
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{\textbf{Band masking in Gemma-3-12B} (layouts $m=4$ and chess captures, $n=320$).}
+  \label{tab:gemma}
+  \begin{tabular}{lcc}
+    \toprule
+    mask & accuracy & \pstale \\
+    \midrule
+    none & 0.547 & 0.378 \\
+    previous state, all layers & 0.709 & 0.194 \\
+    final state, all layers & 0.138 & 0.728 \\
+    earlier states, all layers ($n=220$ paired) & 0.518 $\to$ 0.486 & -- \\
+    previous state, layers 12--17 & 0.644 & 0.269 \\
+    previous state, layers 18--23 & 0.678 & 0.225 \\
+    previous state, any other 6-layer band & 0.528--0.559 & unchanged \\
+    previous state, 8 global layers only & 0.700 & 0.209 \\
+    previous state, 40 sliding-window layers only & 0.603 & 0.319 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{PCD details}
+\label{app:pcd}
+
+\paragraph{Change detectors.} The pixel detector marks the last frame whose mean absolute difference to the previous frame exceeds 2\% of the maximum intensity. The motion-compensated detector (used under noise) normalizes each frame's brightness, aligns it to the previous frame by the integer shift within $\pm3$\,px that minimizes the difference, blurs, crops an 8\,px border, and flags a change when more than 0.4\% of the pixels differ by more than 25 gray levels. The threshold was chosen on a development set disjoint from the test sets (every 20th non-capture chess item and the $m=2$ layouts); the detector matches the clean change point on 36 of 40 development videos. The detector we had preregistered (blurred difference against a median/MAD threshold) found no changes on the noisy development videos and was replaced before any test run.
+
+\paragraph{Noise model.} Gaussian pixel noise ($\sigma=6$), a per-frame random translation of $\pm2$\,px and a per-frame brightness flicker of $\pm3\%$, seeded per item.
+
+\paragraph{Detector-free truncation.} Removing a fixed last $\Delta\in\{0.5,1\}$\,s instead of detecting the change works when $\Delta$ is at least the final dwell and hurts otherwise, because the ``past'' then contains part of the present.
+
+\paragraph{A gate.} We also tested a gate that applies PCD only when the truncated video already predicts the full-video answer (``the answer looks like an echo of the past''). For the four models whose runs completed, it kept 98--100\% of PCD's gain on the stale cells. It did not prevent Idefics3's failure on the single-ball control. Because two preregistered models did not finish, we report the gate only descriptively.
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{\textbf{PCD for image-list models} (exploratory). Last frame $\to$ video (\pstale) $\to$ PCD $\alpha=1$. Idefics3 cannot read the chess board.}
+  \label{tab:nonqwen}
+  \begin{tabular}{llll}
+    \toprule
+    cell & Gemma-3-12B & Idefics3-8B & InternVL3.5-GPT-OSS \\
+    \midrule
+    chess captures, $m=1$, 0.5\,s & 0.95 $\to$ 0.61 (.37) $\to$ 0.93 & -- & 0.70 $\to$ 0.39 (.57) $\to$ 0.79 \\
+    chess captures, $m=3$, 2\,s & 0.98 $\to$ 0.70 (.29) $\to$ 0.91 & -- & 0.85 $\to$ 0.56 (.43) $\to$ 0.78 \\
+    layouts, $m=4$, 0.5\,s & 1.00 $\to$ 0.30 (.48) $\to$ 0.73 & 1.00 $\to$ 0.37 (.43) $\to$ 0.75 & 1.00 $\to$ 0.97 $\to$ 0.98 \\
+    disks, object-keyed, 0.5\,s & 1.00 $\to$ 0.58 (.34) $\to$ 0.82 & 0.86 $\to$ 0.36 (.30) $\to$ 0.92 & 1.00 $\to$ 0.90 $\to$ 0.98 \\
+    single disk, position-keyed, 0.5\,s & 0.72 $\to$ 0.46 $\to$ 0.58 & 0.76 $\to$ 0.52 $\to$ 0.54 & 1.00 $\to$ 0.48 (.52) $\to$ 1.00 \\
+    control: single digit & 0.94 $\to$ 1.00 (PCD) & 0.72 $\to$ 1.00 (PCD) & 0.94 $\to$ 0.96 (PCD) \\
+    control: single ball & 0.50 $\to$ 0.66 (PCD) & 0.44 $\to$ 0.04 (PCD) & 1.00 $\to$ 1.00 (PCD) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{\textbf{PCD under camera noise} (native $\to$ PCD with the motion-compensated detector, $\alpha=1$). With the plain pixel detector, PCD is at or below native in every cell for Qwen3-VL-8B.}
+  \label{tab:noise}
+  \begin{tabular}{lll}
+    \toprule
+    cell & Qwen3-VL-8B & InternVL3.5-8B \\
+    \midrule
+    chess captures, $m=1$, 0.5\,s & 0.39 $\to$ 0.76 & 0.53 $\to$ 0.71 \\
+    layouts, $m=4$, 0.5\,s & 0.38 $\to$ 0.92 & 0.53 $\to$ 0.93 \\
+    history-referenced chess, 2\,s & 0.46 $\to$ 0.61 & 0.62 $\to$ 0.72 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Per-model results}
+\label{app:models}
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{\textbf{Timeline factorial, per model} (word tiles, position questions, last frame minus video accuracy, $n=67$ per cell; final state 0.5\,s).}
+  \label{tab:ad-models}
+  \begin{tabular}{lcccccccc}
+    \toprule
+    & \multicolumn{4}{c}{$m=1$} & \multicolumn{4}{c}{$m=4$} \\
+    \cmidrule(lr){2-5}\cmidrule(lr){6-9}
+    fps / prior dwell & 2 / 1\,s & 2 / 4\,s & 4 / 1\,s & 4 / 4\,s & 2 / 1\,s & 2 / 4\,s & 4 / 1\,s & 4 / 4\,s \\
+    \midrule
+    Qwen3-VL-8B & +0.37 & +0.30 & +0.31 & +0.22 & +0.48 & +0.48 & +0.43 & +0.57 \\
+    Qwen3.5-9B & +0.03 & +0.06 & +0.03 & +0.04 & +0.45 & +0.54 & +0.42 & +0.57 \\
+    InternVL3.5-8B & +0.31 & +0.30 & +0.22 & +0.27 & +0.43 & +0.60 & +0.33 & +0.60 \\
+    LLaVA-OV-7B & +0.45 & +0.46 & +0.40 & +0.49 & +0.55 & +0.57 & +0.52 & +0.57 \\
+    Gemma-3-12B & +0.12 & +0.33 & +0.18 & +0.36 & +0.43 & +0.52 & +0.49 & +0.52 \\
+    \midrule
+    pooled & +0.26 & +0.29 & +0.23 & +0.28 & +0.47 & +0.54 & +0.44 & +0.56 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{\textbf{Real footage, per model} (position questions). Left: natural clips cut 0.5\,s after the last change, question targeting the reconstructed previous state ($n\approx72$). Right: controlled clips with a resting prior state held 4\,s ($n=52$). Accuracy for last frame / frozen video / video; \pstale{} frozen $\to$ video.}
+  \label{tab:real-models}
+  \begin{tabular}{lcccc}
+    \toprule
+    & \multicolumn{2}{c}{natural clips} & \multicolumn{2}{c}{controlled clips, real frames} \\
+    \cmidrule(lr){2-3}\cmidrule(lr){4-5}
+    model & accuracy & \pstale & accuracy & \pstale \\
+    \midrule
+    Qwen3-VL-8B & 0.67 / 0.62 / 0.61 & 0.25 $\to$ 0.25 & 0.79 / 0.77 / 0.58 & 0.21 $\to$ 0.40 \\
+    Qwen3-VL-32B & 0.67 / 0.71 / 0.61 & 0.21 $\to$ 0.26 & 0.71 / 0.69 / 0.65 & 0.21 $\to$ 0.25 \\
+    Qwen3.5-9B & 0.74 / 0.68 / 0.60 & 0.21 $\to$ 0.19 & 0.77 / 0.69 / 0.62 & 0.23 $\to$ 0.29 \\
+    InternVL3.5-8B & 0.68 / 0.68 / 0.50 & 0.18 $\to$ 0.31 & 0.63 / 0.69 / 0.63 & 0.23 $\to$ 0.25 \\
+    LLaVA-OV-7B & 0.72 / 0.67 / 0.54 & 0.21 $\to$ 0.31 & 0.83 / 0.77 / 0.58 & 0.17 $\to$ 0.42 \\
+    Gemma-3-12B & 0.61 / 0.57 / 0.49 & 0.31 $\to$ 0.25 & 0.62 / 0.58 / 0.56 & 0.29 $\to$ 0.35 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Preregistered predictions and outcomes}
+\label{app:prereg}
+
+Table~\ref{tab:prereg} lists every prediction behind the results in this paper, in the order in which they were registered. ``Held'' means the point estimate met the registered threshold; near misses are marked as failed. Earlier entries in the same file (A--K) concern a different question, tracking hidden objects in the shell game, and are not part of this paper.
+
+{\small
+\begin{longtable}{p{0.07\linewidth}p{0.45\linewidth}p{0.4\linewidth}}
+  \caption{\textbf{Preregistered predictions.}}\label{tab:prereg}\\
+  \toprule
+  id & prediction & outcome \\
+  \midrule
+  \endfirsthead
+  \toprule
+  id & prediction & outcome \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  L1 & Accuracy increases with the final dwell. & Held (0.45--0.58 at 0.5\,s, 0.83--0.93 at 4\,s). \\
+  L1$'$ & \pstale{} $>0.1$ even with a 4\,s final dwell. & Failed (0.07--0.08). \\
+  M1 & $m=4$ below $m=1$ by $>0.15$ at 0.5\,s. & Held, but $m=4\approx m=2$: a step, not a graded effect. \\
+  M2 & Image-list input shows the same trends, \pstale{} $>0.2$. & Partly: the effect is reduced, \pstale{} 0.12--0.23. \\
+  N1 & Single digit / single ball show \pstale{} $>0.2$. & Failed (0.92--1.00 accuracy). \\
+  O1 & Three disks worse than one by $>0.15$. & Held for object-keyed questions; position-keyed questions fail even with one disk. \\
+  P1 & Appending the last frame restores $\ge0.9$. & Failed (e.g.\ 0.40$\to$0.65). \\
+  Q1, Q3 & Correlated ``recency heads'' at the answer position are causal. & Failed: no effect of either intervention. \\
+  R1 & Chess video below last frame by $>0.15$, \pstale{} $>0.2$. & Borderline on destination squares; a capture-only follow-up (exploratory) shows 0.20 vs 0.86. \\
+  R2 & $m=1$ closer to the last frame than $m=3$. & Failed. \\
+  S1 & Change-point masking: chess $+0.2$ and \pstale{} $<0.15$. & Partly: accuracy $+0.3$ to $+0.5$, \pstale{} 0.25--0.28. \\
+  S2 & PCD $+0.1$ averaged over sets. & Held for the three Qwen models. \\
+  S3 & No harm on single-item controls. & Held. \\
+  T1, T2 & Questions naming the captured piece: stale answers, fixed by PCD. & Failed; the design was confounded (naming the piece cues that it left), and PCD was harmful. \\
+  U1 & History-referenced questions: \pstale{} $>0.25$ in $\ge3$ of 5 models. & Held (0.27--0.47 in all five). \\
+  U2 & PCD beats video and last frame by $>0.15$. & Held for 4 of 5 models on chess; failed on disks. \\
+  V1 & Fixed-window truncation keeps $\ge70\%$ of the gain. & Partly: only when the window covers the final dwell. \\
+  W1 & Pixel-detector PCD collapses under noise. & Held. \\
+  W2 & A robust detector keeps $\ge70\%$ of the gain. & Held (after the detector amendment, before test runs). \\
+  X1--X3 & A gate keeps PCD's gain and removes its harm. & Incomplete (4 of 6 models); reported descriptively. \\
+  Y1 & Gemma-3 / Idefics3: masking the previous state $+0.15$. & Held for Gemma-3 ($+0.16$); failed for Idefics3 ($+0.05$). \\
+  Y2 & One band of 1/8 depth gives most of the gain. & Held for Gemma-3 (layers 18--23, 81\%). \\
+  Y3 & Masking the final state collapses accuracy. & Held (0.138). \\
+  Z1 & Natural real footage: last frame minus video $\ge0.10$. & Failed ($+0.04$). \\
+  AA1, AA2 & The same with a short final dwell; dwell dependence. & Failed ($+0.01$). \\
+  AB1 & Real frames on a static timeline: gap $\ge0.10$. & Failed ($+0.01$). \\
+  AC1 & Tiles, order questions: gap $\ge0.10$. & Failed ($+0.03$). \\
+  AC2 & Tiles, position questions: gap $\ge0.10$. & Held ($+0.24$). \\
+  AD & $m=4>m=1$; 4\,fps $>$ 2\,fps; 1\,s prior $>$ 4\,s prior. & $m$ held ($+0.24$); fps failed ($\approx0$); prior dwell failed in the opposite direction (4\,s prior states widen the gap by 0.07). \\
+  AE1 & Question at the reconstructed previous state: gap $\ge0.10$. & Held ($+0.12$). \\
+  AE2 & Errors concentrate on the previous state. & Failed ($-0.02$). \\
+  AF1 & Frozen minus video $\ge0.10$. & Failed narrowly ($+0.097$, CI [0.051, 0.144]). \\
+  AF2 & Errors concentrate on the previous state vs frozen. & Failed ($-0.07$). \\
+  AG1 & Controlled real clips: frozen minus video $\ge0.10$. & Failed narrowly ($+0.096$, CI [0.048, 0.144]). \\
+  AG2 & \pstale{} rises with history. & Held ($+0.103$, CI [0.054, 0.151]). \\
+  AH1 & Real clips: masking the previous state lowers \pstale{} by $\ge0.10$. & Held (0.40$\to$0.25, $p=0.02$). \\
+  AH2 & Layers 18--26 recover $\ge50\%$ and are the best band. & Failed: 62\%, but layers 9--17 are better by one item. \\
+  AH3 & Masking the final state raises \pstale. & Held in all three models. \\
+\end{longtable}
+}

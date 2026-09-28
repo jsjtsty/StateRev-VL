@@ -3,6 +3,7 @@
 \usepackage[pagenumbers]{cvpr}
 \usepackage{amsmath}
 \usepackage{booktabs}
+\usepackage{longtable}
 \usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{microtype}
@@ -36,7 +37,7 @@ The failure we study is easy to state. A model reads the last frame correctly wh
 This paper is an analysis paper. Most tests were preregistered in a versioned file before the data were generated or the models were run. We report failed predictions and retracted interpretations alongside the supported ones. Our contributions are:
 \begin{itemize}
   \item \textbf{A controlled demonstration} (\S\ref{sec:phenomenon}) across twelve open VLMs from five families, on synthetic layouts and on real chess games (MET-Bench~\cite{cohen2026metbench}). Every comparison is paired with a last-frame control, and the real-footage comparisons also with a same-pipeline ``frozen video'' control.
-  \item \textbf{What drives it} (\S\ref{sec:drivers}). The effect needs at least two states of the same kind before the final one, grows with their number, and shrinks with the final dwell. In a factorial test, going from 1 to 4 prior states adds 0.24 to the last-frame-minus-video gap, longer prior states add 0.07, and frame rate adds nothing.
+  \item \textbf{What drives it} (\S\ref{sec:drivers}). The effect needs at least one earlier state of the same kind as the final one, grows with the number of such states, and shrinks with the final dwell. In a factorial test, going from 1 to 4 prior states adds 0.24 to the last-frame-minus-video gap, longer prior states add 0.07, and frame rate adds nothing.
   \item \textbf{Where it happens} (\S\ref{sec:mechanism}). Blocking the question tokens' attention to the previous state inside a narrow band of middle layers (relative depth 0.4--0.7) removes most stale answers in two models, and fails in a third. Answer-position ``recency heads'' found by correlation are not causal.
   \item \textbf{Real footage} (\S\ref{sec:real}). In natural shuffling videos from Perception Test~\cite{patraucean2023perception}, history costs about 10 points of accuracy over a frozen-video control. When a clean, well-held previous state is shown, the stale rate rises by 0.10 on real frames, as much as on rendered tiles, and the same mid-layer masking removes it.
   \item \textbf{A fix and its boundary} (\S\ref{sec:fix}). Present-contrastive decoding (PCD) removes the stale answers. It is useful only on questions that need the history as well as the present; for pure present-state questions, reading the last frame is as good.
@@ -67,12 +68,12 @@ We are explicit about the limits (\S\ref{sec:limits}). The newest model we teste
 \paragraph{Models.} We evaluate the following models locally in bf16:
 \begin{itemize}
   \item Qwen3-VL 2B/4B/8B/32B-Instruct~\cite{bai2025qwen3vl}, Qwen3.5-9B, Qwen3.6-27B and Qwen2.5-VL-7B~\cite{bai2025qwen25vl}, all with native video input;
-  \item LLaVA-OneVision-7B~\cite{li2024llavaov} and InternVL3.5-8B~\cite{wang2025internvl35}, with video input;
+  \item LLaVA-OneVision-7B~\cite{li2024llavaov} and InternVL3.5-8B~\cite{wang2025internvl35}, with video input (at most 32 uniformly sampled frames, always including the last);
   \item Gemma-3-12B~\cite{gemma2025gemma3}, Idefics3-8B~\cite{laurencon2024idefics3} and InternVL3.5-GPT-OSS-20B-A4B, with frames given as a numbered image list (``Frame $i$:''), at most 32 uniformly sampled frames, always including the last.
 \end{itemize}
-LLaVA-NeXT-Video-7B was excluded because it could not read the final frame (last-frame accuracy 0.22--0.74).
+LLaVA-NeXT-Video-7B was excluded because it could not read the final frame (last-frame accuracy 0.22--0.74). Qwen models receive every frame; their video encoders merge two consecutive frames into one temporal token group. Local inference used four A100-40GB GPUs.
 
-\paragraph{Questions and scoring.} Every question is multiple choice with three options: the correct final content, the content of the previous state at the queried place (the \emph{stale} option), and one other content present in the video. The option order is shuffled. We score the argmax over the option-letter logits right after the generation prompt, with thinking disabled. We report accuracy and \pstale, the rate of choosing the stale option.
+\paragraph{Questions and scoring.} Every question is multiple choice with three options: the correct final content, the content of the previous state at the queried place (the \emph{stale} option), and one other content present in the video. For the three-color layouts the options are simply the three colors in a fixed order; elsewhere the option order is shuffled. Exact templates are in Appendix~\ref{app:prompts}. We score the argmax over the option-letter logits right after the generation prompt, with thinking disabled. We report accuracy and \pstale, the rate of choosing the stale option.
 
 \paragraph{Controls.}
 \begin{itemize}
@@ -88,6 +89,14 @@ The difference between the frozen video and the real video isolates the effect o
   \item \textbf{Word tiles.} Letter tiles spelling the orders of the real Perception Test word-shuffle videos, used for the factorial study.
   \item \textbf{Real footage.} Perception Test letter-shuffling videos (via MVBench~\cite{li2024mvbench}) with the official per-second letter boxes (\S\ref{sec:real}).
 \end{itemize}
+Figure~\ref{fig:stimuli} shows one example of each. In all synthetic and chess stimuli the changes are abrupt: there is no motion, no hand and no occlusion, so the final state is fully visible from its first frame. Construction details are in Appendix~\ref{app:stimuli}.
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figs/fig_stimuli.pdf}
+  \caption{\textbf{Example stimuli.} One frame per state; durations in parentheses. The previous state is in orange and the final state in blue. (a) Synthetic cups: a reveal layout (the ball is visible) is followed by $m=4$ layouts with abrupt changes. (b) A real game from MET-Bench, rendered as boards; the stale answer is the captured piece. (c) A Perception Test clip reduced to a clean previous resting state (4\,s) and the final state (0.5\,s), cropped to the letters, and the same timeline rendered as tiles (\S\ref{sec:real}). With the full video, Qwen3-VL-8B answers ``A'' on this clip; from the last frame, or the final frame repeated as a video, it answers ``C''.}
+  \label{fig:stimuli}
+\end{figure*}
 
 \paragraph{Statistics.} We use paired bootstrap 95\% CIs (10{,}000 resamples; stratified by model when pooling) and exact McNemar tests. The CI table for all fix experiments is Holm-corrected within each difference column. Each preregistration states a threshold, and we call a prediction supported only if the point estimate meets it. Two real-footage tests (\S\ref{sec:real}) had CIs clearly above zero but point estimates of 0.096 and 0.097 against a threshold of 0.10; we report them as failed.
 
@@ -103,13 +112,35 @@ The difference between the frozen video and the real video isolates the effect o
 
 \paragraph{Final dwell.} In the first test, three layouts followed the reveal, with the dwells of the last two varied independently (Qwen3-VL-8B and Qwen3.5-9B, $n=60$ per cell). Accuracy rises from 0.45--0.58 at $D_\text{fin}=0.5$\,s to 0.83--0.93 at 4\,s. The dwell of the previous layout has only a small effect.
 
-\paragraph{Same-kind prior states.} When the only earlier layout is the visually distinct reveal (cups lifted, ball visible), the present is reported correctly even at 0.5\,s (0.92--1.00). One additional cups-down layout halves accuracy (0.48--0.57). Showing a single initial layout for 2.5--5\,s before a 0.75\,s final layout does not produce the effect (0.87--0.98). The model does not simply weight states by how long they were shown. It confuses \emph{which of several similar changes was the last}.
+\paragraph{Same-kind prior states.} Table~\ref{tab:m} varies the number $m$ of layouts after the reveal. When the only earlier layout is the visually distinct reveal (cups lifted, ball visible; $m=1$), the present is reported correctly even at 0.5\,s (0.92--1.00). One additional cups-down layout ($m=2$) halves accuracy (0.48--0.57), and the errors are almost all one step back: 52--59 of the 55--70 errors pick the immediately preceding layout. Going from $m=2$ to $m=4$ changes little on these layouts. Showing a single initial layout for 2.5--5\,s before a 0.75\,s final layout does not produce the effect either (0.87--0.98). The model does not simply weight states by how long they were shown. It confuses \emph{which of several similar states is the last one}.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{\textbf{Prior layouts, final dwell and input format} (synthetic cups, $n=60$ per cell). Accuracy from the video, with \pstale{} in parentheses; ``images'': the same frames given as a timestamped image list. The last frame alone gives 1.00 in every cell.}
+  \label{tab:m}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{ccllll}
+    \toprule
+    & & \multicolumn{2}{c}{Qwen3-VL-8B} & \multicolumn{2}{c}{Qwen3.5-9B} \\
+    \cmidrule(lr){3-4}\cmidrule(lr){5-6}
+    $m$ & $D_\text{fin}$ & video & images & video & images \\
+    \midrule
+    1 & 0.5\,s & 0.92 (.02) & -- & 1.00 (.00) & -- \\
+    2 & 0.5\,s & 0.57 (.43) & 0.85 & 0.48 (.47) & 0.75 \\
+    2 & 1\,s & 0.70 (.28) & -- & 0.68 (.28) & -- \\
+    2 & 2\,s & 0.82 (.18) & 0.92 & 0.77 (.23) & 0.82 \\
+    4 & 0.5\,s & 0.40 (.43) & 0.70 & 0.58 (.35) & 0.82 \\
+    4 & 2\,s & 0.73 (.18) & 0.93 & 0.75 (.17) & 0.83 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \paragraph{Minimal displays.} A single digit or a single ball that jumps between positions does not trigger the effect (0.92--1.00). Three colored disks do, when asked ``where is the red disk?'' (Qwen3-VL-8B 0.50, Qwen3.5-9B 0.48). A single disk also triggers it when the question is keyed by position (``what is on the left?''): Qwen3-VL-8B 0.54, Qwen3-VL-32B 0.46. The stale present thus needs either several objects or a position-keyed query.
 
-\paragraph{Not a tokenization artifact.} Qwen models merge two frames into one temporal token group. All state changes in our videos fall on group boundaries, so no group mixes old and new frames. Feeding the same frames as a timestamped image list weakens the effect (Qwen3-VL-8B, $m=2$: 0.57$\to$0.85) but does not remove it; \pstale{} stays at 0.12--0.23. Models that take image lists natively (Gemma-3, Idefics3) show the effect in full (Figure~\ref{fig:models}a).
+\paragraph{Not a tokenization artifact.} Qwen models merge two frames into one temporal token group. All state changes in our videos fall on group boundaries, so no group mixes old and new frames. The per-frame spatial grid is the same ($20\times28$ patches) in video and image mode. Feeding the same frames as a timestamped image list weakens the effect (Table~\ref{tab:m}; Qwen3-VL-8B, $m=2$: 0.57$\to$0.85) but does not remove it; \pstale{} at $D_\text{fin}=0.5$\,s stays at 0.12--0.23. Models that take image lists natively (Gemma-3, Idefics3) show the effect in full (Figure~\ref{fig:models}a).
 
-\paragraph{Factorial test of the timeline.} On letter-tile renderings of the real word-shuffle items, we crossed three factors for five models ($n=67$ each): the number of prior states $m\in\{1,4\}$, the dwell per prior state $\in\{1,4\}$\,s, and the frame rate $\in\{2,4\}$\,fps. The final state was held 0.5\,s. Figure~\ref{fig:timeline} shows the result. The main effect of $m$ on the last-frame minus video gap is $+0.240$ [0.181, 0.300] for position questions and $+0.236$ [0.187, 0.284] for order questions. The dwell adds $+0.069$ [0.046, 0.094]; frame rate adds $-0.011$ [$-0.027$, 0.004]. \pstale{} follows the same pattern. At $m=4$, every model shows a position-question gap of 0.42--0.60, including Qwen3.5-9B, whose gap at $m=1$ is only about 0.04.
+\paragraph{Factorial test of the timeline.} On letter-tile renderings of the real word-shuffle items, we crossed three factors for five models ($n=67$ each): the number of prior states $m\in\{1,4\}$, the dwell per prior state $\in\{1,4\}$\,s, and the frame rate $\in\{2,4\}$\,fps. The final state was held 0.5\,s. Figure~\ref{fig:timeline} shows the result. The main effect of $m$ on the last-frame minus video gap is $+0.240$ [0.181, 0.300] for position questions and $+0.236$ [0.187, 0.284] for order questions. The dwell adds $+0.069$ [0.046, 0.094]; frame rate adds $-0.011$ [$-0.027$, 0.004]. \pstale{} follows the same pattern. At $m=4$, every model shows a position-question gap of 0.42--0.60, including Qwen3.5-9B, whose gap at $m=1$ is only about 0.04 (per-model values in Table~\ref{tab:ad-models}). Two of the three preregistered directions were wrong: we expected higher frame rates and \emph{shorter} prior states to hurt, and neither did. On the tiles, going from one to four same-kind prior states roughly doubles the pooled gap. On the cup layouts, one and three same-kind prior states ($m=2$ and $m=4$ in Table~\ref{tab:m}) give similar accuracy. We do not know what causes this difference.
 
 \begin{figure}[t]
   \centering
@@ -118,7 +149,9 @@ The difference between the frozen video and the real video isolates the effect o
   \label{fig:timeline}
 \end{figure}
 
-\paragraph{Other interventions.} Appending the final frame as an extra image after the video only partly helps (Qwen3-VL-8B, $m=4$: 0.40$\to$0.65, against 1.00 for the last frame alone). The video overrides an explicitly given present. Chain-of-thought is inconsistent: it helps some cells, hurts others, and often hallucinates intermediate layouts.
+\paragraph{Other interventions.} Appending the final frame as an extra image after the video, with the text ``The last frame of the video is shown above'', only partly helps (Qwen3-VL-8B, $m=4$: 0.40$\to$0.65; Qwen3.5-9B: 0.58$\to$0.87; the last frame alone gives 1.00). We had preregistered that this anchoring would restore at least 0.9 in every cell; it did not. The video overrides an explicitly given present. Chain-of-thought is inconsistent: it helps some cells, hurts others, and the written reasoning often describes intermediate layouts that never appeared.
+
+\paragraph{Summary of the drivers.} The stale present is not a general weakness in reading the end of a video: single objects that jump are reported correctly. It arises when (i) several states of the same kind occur, (ii) the question selects a place or an object whose content differs between the last two of them, and (iii) the final state is brief relative to the history. Under these conditions the model knows the candidate contents but not which of them is current.
 
 \section{Where the stale answer is retrieved}
 \label{sec:mechanism}
@@ -243,6 +276,12 @@ The second term measures what the model would answer from the past alone, so the
 
 \paragraph{The newest model is immune.} Qwen3.6-27B shows no stale present on any of our tests. Qwen3-VL-32B is much less affected than the 8B model, and InternVL3.5-GPT-OSS is almost immune on synthetic layouts. We did not test closed frontier models. The stale present may therefore be a property of current mid-sized open models that newer training already removes, rather than a lasting limitation. We think the controlled measurements, the timeline factors and the localized retrieval are still useful. They give a concrete test for new models, a diagnosis for the models that fail, and a warning for benchmark design: a clip whose final state is short and preceded by similar states can penalize a model for retrieval, not for perception.
 
+\paragraph{Which models escape, and why?} We can only describe the pattern. Within Qwen3-VL, the effect shrinks from 2B--8B to 32B, and the later Qwen3.6-27B shows none. InternVL3.5 with a GPT-OSS language model is almost immune on layouts but chooses the captured piece in 43--57\% of chess trials. Feeding frames as a timestamped image list helps the Qwen models without removing the effect, and models that only take image lists (Gemma-3, Idefics3) are strongly affected. Neither scale, nor the vision encoder, nor the input format alone explains who escapes. We did not have access to training data, so we cannot test whether the newer models saw more present-state or temporal-order supervision.
+
+\paragraph{What the controls buy.} Two controls changed our conclusions. The last-frame control showed that most proposed fixes for pure present-state questions, including our own PCD, do not beat simply answering from the last frame. The frozen-video control showed that part of the apparent real-footage gap is caused by the video pipeline itself (lower per-frame resolution, temporal merging), not by history: for Qwen3-VL-8B in the natural videos, nearly all of the gap was a pipeline effect. We recommend that any claim of the form ``watching the video hurts the answer about its end'' be paired with both controls.
+
+\paragraph{Implications for video QA benchmarks.} Clips whose last state is short and preceded by similar states test more than perception: a model can see the answer and still retrieve the previous state. Benchmarks that ask about the end of a clip can separate the two failures by reporting last-frame and frozen-video scores alongside the video score. Conversely, questions that need both the history and the present, such as our history-referenced chess questions, cannot be solved from the last frame and are where methods like PCD add value.
+
 \paragraph{Scale and realism.} Most cells have $n=50$--100, and the real-frame experiments have 52 items per model. Band-level comparisons within a model differ by only a few items and should not be read as layer-exact. Our synthetic scenes are clean 2D renders, and the chess boards are rendered from real game records. The strongest real-footage effect comes from a spliced timeline. In natural videos we find a robust cost of history but not a reliable preference for the previous state.
 
 \paragraph{Preregistration.} Hypotheses and thresholds were written into a versioned file before each experiment. We did not use an external registry, so the ordering is documented only by our own records. Several analyses are explicitly exploratory: the non-Qwen replications of the fixes, the band splits in the natural-video diagnosis, and the global-layer finding in Gemma-3.
@@ -257,5 +296,7 @@ Asked what a video shows at its end, many current open video VLMs answer with wh
 \bibliographystyle{ieeenat_fullname}
 \bibliography{refs}
 }
+
+\input{appendix}
 
 \end{document}
